@@ -14,7 +14,9 @@
       {
         "title": "savemoney",
         "width": 800,
-        "height": 600
+        "height": 600,
+        "minWidth": 900,
+        "minHeight": 600
       }
     ],
     "security": {
