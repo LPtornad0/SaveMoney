@@ -34,6 +34,7 @@ export default function Dashboard() {
 
   const [expenseLabel, setExpenseLabel] = useState("");
   const [expenseAmount, setExpenseAmount] = useState("");
+  const [expenseDate, setExpenseDate] = useState("");
   const [expenseCategory, setExpenseCategory] = useState<string>("");
 
   const [recurringLabel, setRecurringLabel] = useState("");
@@ -55,6 +56,23 @@ export default function Dashboard() {
   const [debtDueDate, setDebtDueDate] = useState("");
   const [debtCategoryId, setDebtCategoryId] = useState<number | undefined>(undefined);
 
+  // Form validation states
+  const [incomeLabelError, setIncomeLabelError] = useState("");
+  const [incomeAmountError, setIncomeAmountError] = useState("");
+  const [expenseLabelError, setExpenseLabelError] = useState("");
+  const [expenseAmountError, setExpenseAmountError] = useState("");
+  const [expenseDateError, setExpenseDateError] = useState("");
+  const [recurringLabelError, setRecurringLabelError] = useState("");
+  const [recurringAmountError, setRecurringAmountError] = useState("");
+  const [recurringDayError, setRecurringDayError] = useState("");
+  const [goalLabelError, setGoalLabelError] = useState("");
+  const [goalTargetAmountError, setGoalTargetAmountError] = useState("");
+  const [debtLabelError, setDebtLabelError] = useState("");
+  const [debtAmountError, setDebtAmountError] = useState("");
+  const [debtInterestError, setDebtInterestError] = useState("");
+  const [debtMinimumPaymentError, setDebtMinimumPaymentError] = useState("");
+  const [debtDueDateError, setDebtDueDateError] = useState("");
+
   if ((loading || goalsLoading || debtsLoading) || (!data && !goalsData && !debtsData)) {
     return <div style={{ padding: "2rem", color: "white" }}>Chargement...</div>;
   }
@@ -67,58 +85,177 @@ export default function Dashboard() {
   const expenseCategories = data.categories.filter((c) => c.type === "expense");
 
   async function addIncome() {
-    if (!incomeLabel || !incomeAmount) return;
+    // Reset errors
+    setIncomeLabelError("");
+    setIncomeAmountError("");
+
+    // Validation
+    let isValid = true;
+    if (!incomeLabel || incomeLabel.trim() === "") {
+      setIncomeLabelError("Le libellé est requis");
+      isValid = false;
+    }
+    const amountValue = parseFloat(incomeAmount);
+    if (!incomeAmount || isNaN(amountValue) || amountValue <= 0) {
+      setIncomeAmountError("Veuillez entrer un montant valide supérieur à 0");
+      isValid = false;
+    }
+
+    if (!isValid) return;
+
     const db = await getDb();
     const today = new Date().toISOString().slice(0, 10);
     await db.execute(
       "INSERT INTO incomes (date, month, label, amount, category_id) VALUES (?, ?, ?, ?, ?)",
-      [today, month, incomeLabel, parseFloat(incomeAmount), incomeCategory || null]
+      [today, month, incomeLabel.trim(), amountValue, incomeCategory || null]
     );
+
+    // Reset form
     setIncomeLabel("");
     setIncomeAmount("");
     setIncomeCategory("");
+
+    // Focus on first field
+    const labelInput = document.getElementById('income-label-input');
+    if (labelInput) {
+      labelInput.focus();
+    }
+
+    // Show toast (simplified - in a real app you'd use a proper toast library)
+    showToast("Revenu ajouté avec succès");
+
     refresh();
   }
 
   async function addExpense() {
-    if (!expenseLabel || !expenseAmount) return;
+    // Reset errors
+    setExpenseLabelError("");
+    setExpenseAmountError("");
+    setExpenseDateError("");
+
+    // Validation
+    let isValid = true;
+    if (!expenseLabel || expenseLabel.trim() === "") {
+      setExpenseLabelError("Le libellé est requis");
+      isValid = false;
+    }
+    const amountValue = parseFloat(expenseAmount);
+    if (!expenseAmount || isNaN(amountValue) || amountValue <= 0) {
+      setExpenseAmountError("Veuillez entrer un montant valide supérieur à 0");
+      isValid = false;
+    }
+    if (!expenseDate) {
+      setExpenseDateError("La date est requise");
+      isValid = false;
+    }
+
+    if (!isValid) return;
+
     const db = await getDb();
-    const today = new Date().toISOString().slice(0, 10);
+    // Use the selected date instead of today's date
+    const selectedDate = expenseDate;
+    const month = selectedDate.slice(0, 7); // Extract YYYY-MM from date
+
     await db.execute(
       "INSERT INTO expenses (date, month, label, amount, category_id) VALUES (?, ?, ?, ?, ?)",
-      [today, month, expenseLabel, parseFloat(expenseAmount), expenseCategory || null]
+      [selectedDate, month, expenseLabel.trim(), amountValue, expenseCategory || null]
     );
+
+    // Reset form
     setExpenseLabel("");
     setExpenseAmount("");
+    setExpenseDate("");
     setExpenseCategory("");
+
+    // Focus on first field
+    const labelInput = document.getElementById('expense-label-input');
+    if (labelInput) {
+      labelInput.focus();
+    }
+
+    // Show toast
+    showToast("Dépense ajoutée avec succès");
+
     refresh();
   }
 
   async function addRecurring() {
-    if (!recurringLabel || !recurringAmount) return;
+    // Reset errors
+    setRecurringLabelError("");
+    setRecurringAmountError("");
+    setRecurringDayError("");
+
+    // Validation
+    let isValid = true;
+    if (!recurringLabel || recurringLabel.trim() === "") {
+      setRecurringLabelError("Le libellé est requis");
+      isValid = false;
+    }
+    const amountValue = parseFloat(recurringAmount);
+    if (!recurringAmount || isNaN(amountValue) || amountValue <= 0) {
+      setRecurringAmountError("Veuillez entrer un montant valide supérieur à 0");
+      isValid = false;
+    }
+    const dayValue = parseInt(recurringDay, 10);
+    if (!recurringDay || isNaN(dayValue) || dayValue < 1 || dayValue > 31) {
+      setRecurringDayError("Veuillez entrer un jour valide entre 1 et 31");
+      isValid = false;
+    }
+
+    if (!isValid) return;
+
     const db = await getDb();
     await db.execute(
       "INSERT INTO recurring_expenses (label, amount, category_id, day_of_month, active) VALUES (?, ?, ?, ?, 1)",
       [
-        recurringLabel,
-        parseFloat(recurringAmount),
+        recurringLabel.trim(),
+        amountValue,
         recurringCategory || null,
-        parseInt(recurringDay, 10),
+        dayValue,
       ]
     );
+
+    // Reset form
     setRecurringLabel("");
     setRecurringAmount("");
     setRecurringCategory("");
     setRecurringDay("1");
+
+    // Focus on first field
+    const labelInput = document.getElementById('recurring-label-input');
+    if (labelInput) {
+      labelInput.focus();
+    }
+
+    // Show toast
+    showToast("Charge fixe ajoutée avec succès");
+
     refresh();
   }
 
   async function addNewGoal() {
-    if (!goalLabel || goalTargetAmount <= 0) return;
+    // Reset errors
+    setGoalLabelError("");
+    setGoalTargetAmountError("");
+
+    // Validation
+    let isValid = true;
+    if (!goalLabel || goalLabel.trim() === "") {
+      setGoalLabelError("Le nom de l'objectif est requis");
+      isValid = false;
+    }
+    const targetAmountValue = parseFloat(goalTargetAmount);
+    if (!goalTargetAmount || isNaN(targetAmountValue) || targetAmountValue <= 0) {
+      setGoalTargetAmountError("Veuillez entrer un montant cible valide supérieur à 0");
+      isValid = false;
+    }
+
+    if (!isValid) return;
+
     try {
       await addGoal({
-        label: goalLabel,
-        targetAmount: goalTargetAmount,
+        label: goalLabel.trim(),
+        targetAmount: targetAmountValue,
         currentAmount: 0,
         targetDate: goalTargetDate || undefined,
         categoryId: goalCategoryId
@@ -130,6 +267,15 @@ export default function Dashboard() {
       setGoalTargetDate("");
       setGoalCategoryId(undefined);
 
+      // Focus on first field
+      const labelInput = document.getElementById('goal-label-input');
+      if (labelInput) {
+        labelInput.focus();
+      }
+
+      // Show toast
+      showToast("Objectif ajouté avec succès");
+
       // Refresh goals data
       await refreshGoals();
     } catch (err) {
@@ -139,7 +285,6 @@ export default function Dashboard() {
   }
 
   async function addNewDebt() {
-    if (!debtLabel || debtAmount <= 0) return;
     try {
       await addDebt({
         label: debtLabel,
@@ -276,6 +421,45 @@ export default function Dashboard() {
     background: 'var(--color-income)',
     color: 'var(--text-primary)',
     cursor: 'pointer',
+  };
+
+  const showToast = (message: string) => {
+    // Simple toast implementation - in a real app you'd use a proper toast library
+    const toast = document.createElement('div');
+    toast.textContent = message;
+    toast.style.cssText = `
+      position: fixed;
+      bottom: 20px;
+      right: 20px;
+      background: var(--color-income);
+      color: white;
+      padding: var(--spacing-2) var(--spacing-3);
+      border-radius: var(--radius-md);
+      box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+      z-index: 1000;
+      opacity: 0;
+      transform: translateY(10px);
+      transition: opacity 0.3s ease, transform 0.3s ease;
+    `;
+    document.body.appendChild(toast);
+
+    // Trigger reflow to enable transition
+    void toast.offsetWidth;
+
+    // Show toast
+    toast.style.opacity = '1';
+    toast.style.transform = 'translateY(0)';
+
+    // Hide toast after 3 seconds
+    setTimeout(() => {
+      toast.style.opacity = '0';
+      toast.style.transform = 'translateY(10px)';
+      setTimeout(() => {
+        if (toast.parentNode) {
+          toast.parentNode.removeChild(toast);
+        }
+      }, 300);
+    }, 3000);
   };
 
   return (
@@ -544,107 +728,154 @@ export default function Dashboard() {
         }}>
           <h3>Nouvelle dette</h3>
           <div style={{ display: "grid", gap: 'var(--spacing-2)', gridTemplateColumns: "repeat(auto-fit, minmax(200px, 1fr))" }}>
-            <input
-              placeholder="Nom de la dette"
-              id="debt-label-input"
-              style={inputStyle}
-              value={debtLabel}
-              onChange={(e) => setDebtLabel(e.target.value)}
-            />
-            <input
-              placeholder="Montant dû"
-              type="number"
-              id="debt-amount-input"
-              style={inputStyle}
-              value={debtAmount}
-              onChange={(e) => setDebtAmount(parseFloat(e.target.value) || 0)}
-            />
-            <input
-              placeholder="Taux d'intérêt (%)"
-              type="number"
-              id="debt-interest-input"
-              style={inputStyle}
-              value={debtInterest}
-              onChange={(e) => setDebtInterest(parseFloat(e.target.value) || undefined)}
-            />
-            <input
-              placeholder="Paiement minimum"
-              type="number"
-              id="debt-minimum-input"
-              style={inputStyle}
-              value={debtMinimumPayment}
-              onChange={(e) => setDebtMinimumPayment(parseFloat(e.target.value) || undefined)}
-            />
-            <input
-              placeholder="Date d'échéance"
-              type="date"
-              id="debt-due-date-input"
-              style={inputStyle}
-              value={debtDueDate}
-              onChange={(e) => setDebtDueDate(e.target.value)}
-            />
-            <select
-              id="debt-category-input"
-              style={inputStyle}
-              value={debtCategoryId}
-              onChange={(e) => setDebtCategoryId(e.target.value ? parseInt(e.target.value) : undefined)}
-            >
-              <option value="">Catégorie (optionnel)</option>
-              {expenseCategories.map((cat) => (
-                <option key={cat.id} value={cat.id}>
-                  {cat.name}
-                </option>
-              ))}
-            </select>
-            <button
-              onClick={async () => {
-                const labelInput = document.getElementById('debt-label-input') as HTMLInputElement;
-                const amountInput = document.getElementById('debt-amount-input') as HTMLInputElement;
-                const interestInput = document.getElementById('debt-interest-input') as HTMLInputElement;
-                const minimumInput = document.getElementById('debt-minimum-input') as HTMLInputElement;
-                const dueDateInput = document.getElementById('debt-due-date-input') as HTMLInputElement;
-                const categorySelect = document.getElementById('debt-category-input') as HTMLSelectElement;
+            <div>
+              <label>Nom de la dette</label>
+              <input
+                id="debt-label-input"
+                style={inputStyle}
+                placeholder="Ex: Carte Visa, Prêt étudiant..."
+                value={debtLabel}
+                onChange={(e) => setDebtLabel(e.target.value)}
+              />
+              {debtLabelError && <p style={{ color: 'var(--color-expense)', fontSize: 'var(--text-xs)', marginTop: 'var(--spacing-1)' }}>{debtLabelError}</p>}
+            </div>
+            <div>
+              <label>Montant dû (€)</label>
+              <input
+                id="debt-amount-input"
+                style={inputStyle}
+                placeholder="Ex: 5000,00"
+                type="number"
+                value={debtAmount}
+                onChange={(e) => setDebtAmount(parseFloat(e.target.value) || 0)}
+              />
+              {debtAmountError && <p style={{ color: 'var(--color-expense)', fontSize: 'var(--text-xs)', marginTop: 'var(--spacing-1)' }}>{debtAmountError}</p>}
+            </div>
+            <div>
+              <label>Taux d'intérêt (%)</label>
+              <input
+                id="debt-interest-input"
+                style={inputStyle}
+                placeholder="Ex: 4,5"
+                type="number"
+                value={debtInterest}
+                onChange={(e) => setDebtInterest(parseFloat(e.target.value) || undefined)}
+              />
+              {debtInterestError && <p style={{ color: 'var(--color-expense)', fontSize: 'var(--text-xs)', marginTop: 'var(--spacing-1)' }}>{debtInterestError}</p>}
+            </div>
+            <div>
+              <label>Paiement minimum (€)</label>
+              <input
+                id="debt-minimum-input"
+                style={inputStyle}
+                placeholder="Ex: 150,00"
+                type="number"
+                value={debtMinimumPayment}
+                onChange={(e) => setDebtMinimumPayment(parseFloat(e.target.value) || undefined)}
+              />
+              {debtMinimumPaymentError && <p style={{ color: 'var(--color-expense)', fontSize: 'var(--text-xs)', marginTop: 'var(--spacing-1)' }}>{debtMinimumPaymentError}</p>}
+            </div>
+            <div>
+              <label>Date d'échéance</label>
+              <input
+                id="debt-due-date-input"
+                style={inputStyle}
+                type="date"
+                value={debtDueDate}
+                onChange={(e) => setDebtDueDate(e.target.value)}
+              />
+              {debtDueDateError && <p style={{ color: 'var(--color-expense)', fontSize: 'var(--text-xs)', marginTop: 'var(--spacing-1)' }}>{debtDueDateError}</p>}
+            </div>
+            <div>
+              <label>Catégorie (optionnel)</label>
+              <select
+                id="debt-category-input"
+                style={inputStyle}
+                value={debtCategoryId}
+                onChange={(e) => setDebtCategoryId(e.target.value ? parseInt(e.target.value) : undefined)}
+              >
+                <option value="">Aucune catégorie</option>
+                {expenseCategories.map((cat) => (
+                  <option key={cat.id} value={cat.id}>
+                    {cat.name}
+                  </option>
+                ))}
+              </select>
+            </div>
+            <div style={{ gridColumn: "1 / -1", display: "flex", justifyContent: "flex-end" }}>
+              <button
+                onClick={async () => {
+                  // Reset errors
+                  setDebtLabelError("");
+                  setDebtAmountError("");
+                  setDebtInterestError("");
+                  setDebtMinimumPaymentError("");
+                  setDebtDueDateError("");
 
-                const label = labelInput.value.trim();
-                const amount = parseFloat(amountInput.value);
-                const interestRate = parseFloat(interestInput.value) || undefined;
-                const minimumPayment = parseFloat(minimumInput.value) || undefined;
-                const dueDate = dueDateInput.value || undefined;
-                const categoryId = categorySelect.value ? parseInt(categorySelect.value) : undefined;
+                  // Validation
+                  let isValid = true;
+                  const labelInput = document.getElementById('debt-label-input') as HTMLInputElement;
+                  const amountInput = document.getElementById('debt-amount-input') as HTMLInputElement;
+                  const interestInput = document.getElementById('debt-interest-input') as HTMLInputElement;
+                  const minimumInput = document.getElementById('debt-minimum-input') as HTMLInputElement;
+                  const dueDateInput = document.getElementById('debt-due-date-input') as HTMLInputElement;
+                  const categorySelect = document.getElementById('debt-category-input') as HTMLSelectElement;
 
-                if (!label || isNaN(amount) || amount <= 0) {
-                  alert('Veuillez remplir correctement les champs requis');
-                  return;
-                }
+                  const label = labelInput.value.trim();
+                  const amount = parseFloat(amountInput.value);
+                  const interestRate = parseFloat(interestInput.value) || undefined;
+                  const minimumPayment = parseFloat(minimumInput.value) || undefined;
+                  const dueDate = dueDateInput.value || undefined;
+                  const categoryId = categorySelect.value ? parseInt(categorySelect.value) : undefined;
 
-                try {
-                  await addDebt({
-                    label,
-                    amountOwed: amount,
-                    interestRate,
-                    minimumPayment,
-                    dueDate,
-                    categoryId
-                  });
+                  if (!label) {
+                    setDebtLabelError("Le nom de la dette est requis");
+                    isValid = false;
+                  }
+                  if (isNaN(amount) || amount <= 0) {
+                    setDebtAmountError("Veuillez entrer un montant valide supérieur à 0");
+                    isValid = false;
+                  }
 
-                  // Reset form
-                  setDebtLabel("");
-                  setDebtAmount(0);
-                  setDebtInterest(undefined);
-                  setDebtMinimumPayment(undefined);
-                  setDebtDueDate("");
-                  setDebtCategoryId(undefined);
+                  if (!isValid) return;
 
-                  // Refresh debts data
-                  await refreshDebts();
-                } catch (err) {
-                  alert('Erreur lors de la création de la dette: ' + err);
-                }
-              }}
-              style={btnStyle}
-            >
-              Ajouter la dette
-            </button>
+                  try {
+                    await addDebt({
+                      label,
+                      amountOwed: amount,
+                      interestRate,
+                      minimumPayment,
+                      dueDate,
+                      categoryId
+                    });
+
+                    // Reset form
+                    setDebtLabel("");
+                    setDebtAmount(0);
+                    setDebtInterest(undefined);
+                    setDebtMinimumPayment(undefined);
+                    setDebtDueDate("");
+                    setDebtCategoryId(undefined);
+
+                    // Focus on first field
+                    if (labelInput) {
+                      labelInput.focus();
+                    }
+
+                    // Show toast
+                    showToast("Dette ajoutée avec succès");
+
+                    // Refresh debts data
+                    await refreshDebts();
+                  } catch (err) {
+                    alert('Erreur lors de la création de la dette: ' + err);
+                  }
+                }}
+                style={btnStyle}
+              >
+                Ajouter la dette
+              </button>
+            </div>
           </div>
         </div>
       </section>
@@ -660,34 +891,50 @@ export default function Dashboard() {
         {/* Revenu */}
         <div style={cardStyle}>
           <h3>Ajouter un revenu</h3>
-          <input
-            style={inputStyle}
-            placeholder="Libellé"
-            value={incomeLabel}
-            onChange={(e) => setIncomeLabel(e.target.value)}
-          />
-          <input
-            style={inputStyle}
-            placeholder="Montant"
-            type="number"
-            value={incomeAmount}
-            onChange={(e) => setIncomeAmount(e.target.value)}
-          />
-          <select
-            style={inputStyle}
-            value={incomeCategory}
-            onChange={(e) => setIncomeCategory(e.target.value)}
-          >
-            <option value="">Catégorie</option>
-            {incomeCategories.map((c) => (
-              <option key={c.id} value={c.id}>
-                {c.name}
-              </option>
-            ))}
-          </select>
-          <button style={btnStyle} onClick={addIncome}>
-            Ajouter
-          </button>
+          <div style={{ display: "grid", gap: 'var(--spacing-2)', gridTemplateColumns: "repeat(auto-fill, minmax(200px, 1fr))" }}>
+            <div>
+              <label>Libellé</label>
+              <input
+                id="income-label-input"
+                style={inputStyle}
+                placeholder="Ex: Salaire, Freelance..."
+                value={incomeLabel}
+                onChange={(e) => setIncomeLabel(e.target.value)}
+              />
+              {incomeLabelError && <p style={{ color: 'var(--color-expense)', fontSize: 'var(--text-xs)', marginTop: 'var(--spacing-1)' }}>{incomeLabelError}</p>}
+            </div>
+            <div>
+              <label>Montant (€)</label>
+              <input
+                style={inputStyle}
+                placeholder="Ex: 1500,00"
+                type="number"
+                value={incomeAmount}
+                onChange={(e) => setIncomeAmount(e.target.value)}
+              />
+              {incomeAmountError && <p style={{ color: 'var(--color-expense)', fontSize: 'var(--text-xs)', marginTop: 'var(--spacing-1)' }}>{incomeAmountError}</p>}
+            </div>
+            <div>
+              <label>Catégorie (optionnel)</label>
+              <select
+                style={inputStyle}
+                value={incomeCategory}
+                onChange={(e) => setIncomeCategory(e.target.value)}
+              >
+                <option value="">Aucune catégorie</option>
+                {incomeCategories.map((c) => (
+                  <option key={c.id} value={c.id}>
+                    {c.name}
+                  </option>
+                ))}
+              </select>
+            </div>
+            <div style={{ gridColumn: "1 / -1", display: "flex", justifyContent: "flex-end" }}>
+              <button style={btnStyle} onClick={addIncome}>
+                Ajouter
+              </button>
+            </div>
+          </div>
 
           <ul>
             {data.incomes.map((i) => (
@@ -704,34 +951,61 @@ export default function Dashboard() {
         {/* Dépense ponctuelle */}
         <div style={cardStyle}>
           <h3>Ajouter une dépense</h3>
-          <input
-            style={inputStyle}
-            placeholder="Libellé"
-            value={expenseLabel}
-            onChange={(e) => setExpenseLabel(e.target.value)}
-          />
-          <input
-            style={inputStyle}
-            placeholder="Montant"
-            type="number"
-            value={expenseAmount}
-            onChange={(e) => setExpenseAmount(e.target.value)}
-          />
-          <select
-            style={inputStyle}
-            value={expenseCategory}
-            onChange={(e) => setExpenseCategory(e.target.value)}
-          >
-            <option value="">Catégorie</option>
-            {expenseCategories.map((c) => (
-              <option key={c.id} value={c.id}>
-                {c.name}
-              </option>
-            ))}
-          </select>
-          <button style={btnStyle} onClick={addExpense}>
-            Ajouter
-          </button>
+          <div style={{ display: "grid", gap: 'var(--spacing-2)', gridTemplateColumns: "repeat(auto-fill, minmax(200px, 1fr))" }}>
+            <div>
+              <label>Libellé</label>
+              <input
+                id="expense-label-input"
+                style={inputStyle}
+                placeholder="Ex: Supermarché, Transport..."
+                value={expenseLabel}
+                onChange={(e) => setExpenseLabel(e.target.value)}
+              />
+              {expenseLabelError && <p style={{ color: 'var(--color-expense)', fontSize: 'var(--text-xs)', marginTop: 'var(--spacing-1)' }}>{expenseLabelError}</p>}
+            </div>
+            <div>
+              <label>Date</label>
+              <input
+                id="expense-date-input"
+                style={inputStyle}
+                type="date"
+                value={expenseDate}
+                onChange={(e) => setExpenseDate(e.target.value)}
+              />
+              {expenseDateError && <p style={{ color: 'var(--color-expense)', fontSize: 'var(--text-xs)', marginTop: 'var(--spacing-1)' }}>{expenseDateError}</p>}
+            </div>
+            <div>
+              <label>Montant (€)</label>
+              <input
+                style={inputStyle}
+                placeholder="Ex: 15,50"
+                type="number"
+                value={expenseAmount}
+                onChange={(e) => setExpenseAmount(e.target.value)}
+              />
+              {expenseAmountError && <p style={{ color: 'var(--color-expense)', fontSize: 'var(--text-xs)', marginTop: 'var(--spacing-1)' }}>{expenseAmountError}</p>}
+            </div>
+            <div>
+              <label>Catégorie</label>
+              <select
+                style={inputStyle}
+                value={expenseCategory}
+                onChange={(e) => setExpenseCategory(e.target.value)}
+              >
+                <option value="">Catégorie</option>
+                {expenseCategories.map((c) => (
+                  <option key={c.id} value={c.id}>
+                    {c.name}
+                  </option>
+                ))}
+              </select>
+            </div>
+            <div style={{ gridColumn: "1 / -1", display: "flex", justifyContent: "flex-end" }}>
+              <button style={btnStyle} onClick={addExpense}>
+                Ajouter
+              </button>
+            </div>
+          </div>
 
           <ul>
             {data.expenses.map((e) => (
@@ -749,43 +1023,64 @@ export default function Dashboard() {
                 {/* Dépense récurrente */}
         <div style={cardStyle}>
           <h3>Ajouter une charge fixe</h3>
-          <input
-            style={inputStyle}
-            placeholder="Libellé"
-            value={recurringLabel}
-            onChange={(e) => setRecurringLabel(e.target.value)}
-          />
-          <input
-            style={inputStyle}
-            placeholder="Montant"
-            type="number"
-            value={recurringAmount}
-            onChange={(e) => setRecurringAmount(e.target.value)}
-          />
-          <select
-            style={inputStyle}
-            value={recurringCategory}
-            onChange={(e) => setRecurringCategory(e.target.value)}
-          >
-            <option value="">Catégorie</option>
-            {expenseCategories.map((c) => (
-              <option key={c.id} value={c.id}>
-                {c.name}
-              </option>
-            ))}
-          </select>
-          <input
-            style={{ ...inputStyle, width: "60px" }}
-            placeholder="Jour"
-            type="number"
-            min="1"
-            max="31"
-            value={recurringDay}
-            onChange={(e) => setRecurringDay(e.target.value)}
-          />
-          <button style={btnStyle} onClick={addRecurring}>
-            Ajouter
-          </button>
+          <div style={{ display: "grid", gap: 'var(--spacing-2)', gridTemplateColumns: "repeat(auto-fill, minmax(200px, 1fr))" }}>
+            <div>
+              <label>Libellé</label>
+              <input
+                id="recurring-label-input"
+                style={inputStyle}
+                placeholder="Ex: Loyer, Internet, Abonnement..."
+                value={recurringLabel}
+                onChange={(e) => setRecurringLabel(e.target.value)}
+              />
+              {recurringLabelError && <p style={{ color: 'var(--color-expense)', fontSize: 'var(--text-xs)', marginTop: 'var(--spacing-1)' }}>{recurringLabelError}</p>}
+            </div>
+            <div>
+              <label>Montant (€)</label>
+              <input
+                style={inputStyle}
+                placeholder="Ex: 50,00"
+                type="number"
+                value={recurringAmount}
+                onChange={(e) => setRecurringAmount(e.target.value)}
+              />
+              {recurringAmountError && <p style={{ color: 'var(--color-expense)', fontSize: 'var(--text-xs)', marginTop: 'var(--spacing-1)' }}>{recurringAmountError}</p>}
+            </div>
+            <div>
+              <label>Catégorie</label>
+              <select
+                style={inputStyle}
+                value={recurringCategory}
+                onChange={(e) => setRecurringCategory(e.target.value)}
+              >
+                <option value="">Catégorie</option>
+                {expenseCategories.map((c) => (
+                  <option key={c.id} value={c.id}>
+                    {c.name}
+                  </option>
+                ))}
+              </select>
+            </div>
+            <div>
+              <label>Jour du mois</label>
+              <input
+                id="recurring-day-input"
+                style={{ ...inputStyle, width: "60px" }}
+                placeholder="Ex: 5"
+                type="number"
+                min="1"
+                max="31"
+                value={recurringDay}
+                onChange={(e) => setRecurringDay(e.target.value)}
+              />
+              {recurringDayError && <p style={{ color: 'var(--color-expense)', fontSize: 'var(--text-xs)', marginTop: 'var(--spacing-1)' }}>{recurringDayError}</p>}
+            </div>
+            <div style={{ gridColumn: "1 / -1", display: "flex", justifyContent: "flex-end" }}>
+              <button style={btnStyle} onClick={addRecurring}>
+                Ajouter
+              </button>
+            </div>
+          </div>
 
           <ul>
             {data.recurringExpenses.map((r) => (
@@ -805,45 +1100,62 @@ export default function Dashboard() {
         {/* Objectif d'épargne */}
         <div style={cardStyle}>
           <h3>Nouvel objectif d'épargne</h3>
-          <input
-            placeholder="Nom de l'objectif"
-            id="goal-label-input"
-            style={inputStyle}
-            value={goalLabel}
-            onChange={(e) => setGoalLabel(e.target.value)}
-          />
-          <input
-            placeholder="Montant cible"
-            type="number"
-            id="goal-target-amount-input"
-            style={inputStyle}
-            value={goalTargetAmount}
-            onChange={(e) => setGoalTargetAmount(parseFloat(e.target.value) || 0)}
-          />
-          <input
-            placeholder="Date cible (optionnel)"
-            type="date"
-            id="goal-target-date-input"
-            style={inputStyle}
-            value={goalTargetDate}
-            onChange={(e) => setGoalTargetDate(e.target.value)}
-          />
-          <select
-            id="goal-category-input"
-            style={inputStyle}
-            value={goalCategoryId}
-            onChange={(e) => setGoalCategoryId(e.target.value ? parseInt(e.target.value) : undefined)}
-          >
-            <option value="">Catégorie (optionnel)</option>
-            {expenseCategories.map((cat) => (
-              <option key={cat.id} value={cat.id}>
-                {cat.name}
-              </option>
-            ))}
-          </select>
-          <button style={btnStyle} onClick={addNewGoal}>
-            Ajouter l'objectif
-          </button>
+          <div style={{ display: "grid", gap: 'var(--spacing-2)', gridTemplateColumns: "repeat(auto-fill, minmax(200px, 1fr))" }}>
+            <div>
+              <label>Nom de l'objectif</label>
+              <input
+                id="goal-label-input"
+                style={inputStyle}
+                placeholder="Ex: Vacances, Nouvelle voiture..."
+                value={goalLabel}
+                onChange={(e) => setGoalLabel(e.target.value)}
+              />
+              {goalLabelError && <p style={{ color: 'var(--color-expense)', fontSize: 'var(--text-xs)', marginTop: 'var(--spacing-1)' }}>{goalLabelError}</p>}
+            </div>
+            <div>
+              <label>Montant cible (€)</label>
+              <input
+                id="goal-target-amount-input"
+                style={inputStyle}
+                placeholder="Ex: 1000,00"
+                type="number"
+                value={goalTargetAmount}
+                onChange={(e) => setGoalTargetAmount(parseFloat(e.target.value) || 0)}
+              />
+              {goalTargetAmountError && <p style={{ color: 'var(--color-expense)', fontSize: 'var(--text-xs)', marginTop: 'var(--spacing-1)' }}>{goalTargetAmountError}</p>}
+            </div>
+            <div>
+              <label>Date cible (optionnel)</label>
+              <input
+                id="goal-target-date-input"
+                style={inputStyle}
+                type="date"
+                value={goalTargetDate}
+                onChange={(e) => setGoalTargetDate(e.target.value)}
+              />
+            </div>
+            <div>
+              <label>Catégorie (optionnel)</label>
+              <select
+                id="goal-category-input"
+                style={inputStyle}
+                value={goalCategoryId}
+                onChange={(e) => setGoalCategoryId(e.target.value ? parseInt(e.target.value) : undefined)}
+              >
+                <option value="">Aucune catégorie</option>
+                {expenseCategories.map((cat) => (
+                  <option key={cat.id} value={cat.id}>
+                    {cat.name}
+                  </option>
+                ))}
+              </select>
+            </div>
+            <div style={{ gridColumn: "1 / -1", display: "flex", justifyContent: "flex-end" }}>
+              <button style={btnStyle} onClick={addNewGoal}>
+                Ajouter l'objectif
+              </button>
+            </div>
+          </div>
         </div>
       </section>
     </main>
