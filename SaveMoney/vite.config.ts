@@ -25,8 +25,17 @@ export default defineConfig(async () => ({
         }
       : undefined,
     watch: {
-      // 3. tell Vite to ignore watching `src-tauri`
-      ignored: ["**/src-tauri/**"],
+      // 3. tell Vite to ignore watching `src-tauri` and target directories
+      ignored: [
+        "**/src-tauri/**",
+        "**/target/**",
+        "**/debug/**",
+        "**/release/**",
+        "**/src-tauri/target/**",
+        "**/src-tauri/target/debug/**",
+        "**/src-tauri/target/debug/deps/**",
+        "**/savemoney_lib.dll"
+      ],
     },
   },
 }));

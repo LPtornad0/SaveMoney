@@ -112,13 +112,11 @@ export default function Dashboard() {
   }
 
   // Helper function to identify savings categories (same as in hook)
-// FIXED: Removed leading spaces from search strings
   const isSavingsCategory = (categoryName: string) => {
     if (!categoryName) return false;
     const lowerName = categoryName.toLowerCase();
-    return lowerName.includes(' épargne') ||
-           lowerName.includes(' savings') ||
-           lowerName.includes(' épargne');
+    return lowerName.includes('épargne') ||
+           lowerName.includes('savings');
   };
 
   const expensePerCategory = expenseCategories

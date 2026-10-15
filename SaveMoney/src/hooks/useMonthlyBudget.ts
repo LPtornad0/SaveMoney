@@ -51,9 +51,8 @@ export function useMonthlyBudget(month: string) {
       const isSavingsCategory = (categoryName: string) => {
         if (!categoryName) return false;
         const lowerName = categoryName.toLowerCase();
-        return lowerName.includes(' épargne') ||
-               lowerName.includes(' savings') ||
-               lowerName.includes(' épargne');
+        return lowerName.includes('épargne') ||
+               lowerName.includes('savings');
       };
 
       const totalIncome = incomes.reduce((sum, i) => sum + i.amount, 0);
