@@ -1,8 +1,13 @@
+import { isTauri } from "@tauri-apps/api/core";
 import Database from "@tauri-apps/plugin-sql";
 
 let dbPromise: Promise<Database> | null = null;
 
 export async function getDb(): Promise<Database> {
+  if (!isTauri()) {
+    throw new Error("Cette app doit être lancée via Tauri. Utilisez la commande: npm.cmd run tauri dev");
+  }
+
   if (!dbPromise) {
     dbPromise = Database.load("sqlite:save_money.db");
   }
@@ -58,6 +63,7 @@ const DEFAULT_CATEGORIES: Array<{ name: string; type: "income" | "expense" }> = 
   { name: "Loisirs", type: "expense" },
   { name: "Logement", type: "expense" },
   { name: "Autre", type: "expense" },
+  { name: "Épargne", type: "expense" },
 ];
 
 export async function initSchema() {
@@ -69,10 +75,24 @@ export async function initSchema() {
   );
 
   if (existing[0]?.count === 0) {
+    // Fresh install - insert all default categories
     for (const cat of DEFAULT_CATEGORIES) {
       await db.execute(
         "INSERT INTO categories (name, type) VALUES (?, ?)",
         [cat.name, cat.type]
+      );
+    }
+  } else {
+    // Existing database - check if Épargne category exists, add if missing
+    const epargneExists = await db.select<{ count: number }[]>(
+      "SELECT COUNT(*) as count FROM categories WHERE name = ?",
+      ["Épargne"]
+    );
+
+    if (epargneExists[0]?.count === 0) {
+      await db.execute(
+        "INSERT INTO categories (name, type) VALUES (?, ?)",
+        ["Épargne", "expense"]
       );
     }
   }

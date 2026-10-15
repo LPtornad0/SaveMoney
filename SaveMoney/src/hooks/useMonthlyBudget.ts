@@ -10,6 +10,7 @@ export interface MonthlyBudgetData {
   totalIncome: number;
   totalExpense: number;
   totalRecurring: number;
+  totalSavings: number;
   available: number;
 }
 
@@ -46,9 +47,41 @@ export function useMonthlyBudget(month: string) {
         []
       );
 
+      // Helper function to identify savings categories
+      const isSavingsCategory = (categoryName: string) => {
+        if (!categoryName) return false;
+        const lowerName = categoryName.toLowerCase();
+        return lowerName.includes(' épargne') ||
+               lowerName.includes(' savings') ||
+               lowerName.includes(' épargne');
+      };
+
       const totalIncome = incomes.reduce((sum, i) => sum + i.amount, 0);
-      const totalExpense = expenses.reduce((sum, e) => sum + e.amount, 0);
-      const totalRecurring = recurringExpenses.reduce((sum, r) => sum + r.amount, 0);
+
+      // Separate expenses into savings and regular
+      const savingsExpenses = expenses.filter(expense =>
+        expense.category_id &&
+        isSavingsCategory(categories.find(cat => cat.id === expense.category_id)?.name || '')
+      );
+      const regularExpenses = expenses.filter(expense =>
+        !expense.category_id ||
+        !isSavingsCategory(categories.find(cat => cat.id === expense.category_id)?.name || '')
+      );
+
+      // Separate recurring expenses into savings and regular
+      const savingsRecurringExpenses = recurringExpenses.filter(expense =>
+        expense.category_id &&
+        isSavingsCategory(categories.find(cat => cat.id === expense.category_id)?.name || '')
+      );
+      const regularRecurringExpenses = recurringExpenses.filter(expense =>
+        !expense.category_id ||
+        !isSavingsCategory(categories.find(cat => cat.id === expense.category_id)?.name || '')
+      );
+
+      const totalSavings = savingsExpenses.reduce((sum, expense) => sum + expense.amount, 0) +
+                          savingsRecurringExpenses.reduce((sum, expense) => sum + expense.amount, 0);
+      const totalExpense = regularExpenses.reduce((sum, expense) => sum + expense.amount, 0);
+      const totalRecurring = regularRecurringExpenses.reduce((sum, expense) => sum + expense.amount, 0);
       const available = totalIncome - totalExpense - totalRecurring;
 
       setData({
@@ -59,11 +92,17 @@ export function useMonthlyBudget(month: string) {
         totalIncome,
         totalExpense,
         totalRecurring,
+        totalSavings,
         available,
       });
     } catch (err) {
       console.error("Failed to load monthly budget", err);
-      setError("Impossible de charger les données. Vérifie la base de données.");
+      const message =
+        err instanceof Error && err.message
+          ? err.message
+          : "Vérifie la base de données.";
+
+      setError(`Impossible de charger les données. ${message}`);
       setData({
         incomes: [],
         expenses: [],
@@ -72,6 +111,7 @@ export function useMonthlyBudget(month: string) {
         totalIncome: 0,
         totalExpense: 0,
         totalRecurring: 0,
+        totalSavings: 0,
         available: 0,
       });
     } finally {

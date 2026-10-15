@@ -4,9 +4,9 @@
   "version": "0.1.0",
   "identifier": "com.helin.savemoney",
   "build": {
-    "beforeDevCommand": "npm run dev",
+    "beforeDevCommand": "npm.cmd run dev",
     "devUrl": "http://localhost:5173",
-    "beforeBuildCommand": "npm run build",
+    "beforeBuildCommand": "npm.cmd run build",
     "frontendDist": "../dist"
   },
   "app": {

@@ -111,21 +111,33 @@ export default function Dashboard() {
     refresh();
   }
 
-  const expensePerCategory = expenseCategories.map((cat) => {
-    const fromExpenses = data.expenses
-      .filter((e) => e.category_id === cat.id)
-      .reduce((sum, e) => sum + e.amount, 0);
-    const fromRecurring = data.recurringExpenses
-      .filter((r) => r.category_id === cat.id)
-      .reduce((sum, r) => sum + r.amount, 0);
-    return { label: cat.name, total: fromExpenses + fromRecurring };
-  });
+  // Helper function to identify savings categories (same as in hook)
+// FIXED: Removed leading spaces from search strings
+  const isSavingsCategory = (categoryName: string) => {
+    if (!categoryName) return false;
+    const lowerName = categoryName.toLowerCase();
+    return lowerName.includes(' épargne') ||
+           lowerName.includes(' savings') ||
+           lowerName.includes(' épargne');
+  };
+
+  const expensePerCategory = expenseCategories
+    .filter(cat => !isSavingsCategory(cat.name)) // Filter out savings categories
+    .map((cat) => {
+      const fromExpenses = data.expenses
+        .filter((e) => e.category_id === cat.id)
+        .reduce((sum, e) => sum + e.amount, 0);
+      const fromRecurring = data.recurringExpenses
+        .filter((r) => r.category_id === cat.id)
+        .reduce((sum, r) => sum + r.amount, 0);
+      return { label: cat.name, total: fromExpenses + fromRecurring };
+    });
 
   const chartData = {
     labels: expensePerCategory.map((e) => e.label),
     datasets: [
       {
-        label: "Dépenses par catégorie (€)",
+        label: "Dépenses hors épargne par catégorie (€)",
         data: expensePerCategory.map((e) => e.total),
         backgroundColor: "rgba(54, 162, 235, 0.7)",
       },
@@ -188,6 +200,10 @@ export default function Dashboard() {
         <div style={{ ...cardStyle, background: "#1b4b2a" }}>
           <h3>Disponible</h3>
           <p style={{ fontSize: "1.4rem" }}>{data.available.toFixed(2)} €</p>
+        </div>
+        <div style={{ ...cardStyle, background: "#1b4b2a" }}>
+          <h3>Épargne</h3>
+          <p style={{ fontSize: "1.4rem" }}>{data.totalSavings.toFixed(2)} €</p>
         </div>
       </section>
 
