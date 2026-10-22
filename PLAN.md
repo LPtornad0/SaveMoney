@@ -120,29 +120,29 @@ Décisions prises :
 
 ## Phase 6 : Listes d'opérations
 
-**Statut : partiellement réalisée. La phase n'est pas terminée.**
+**Statut : réalisée et validée manuellement dans Tauri** (commits `e9ac9f8`, `8a7dde4`, `9dc0948`, puis `119a4e5` pour l'édition en ligne, les pastilles, les boutons et les états vides). Validation rapportée par l'utilisateur sur le périmètre décrit ci-dessous. Les scénarios d'erreur SQL et de fermeture simulée ne sont pas testés dans Tauri : ils ne sont pas déclarés validés.
 
-Réalisé et testé manuellement dans Tauri (scénarios sans erreur simulée) :
+Réalisé :
 - Suppression différée avec toast « Annuler » pendant 5 s ; le `DELETE` n'est exécuté qu'à l'expiration, et l'annulation annule le timer (commits `e9ac9f8`, `8a7dde4`).
-- Finalisation forcée des suppressions en attente avant un changement de mois réussi et avant la fermeture normale de la fenêtre (commit `8a7dde4`).
+- Finalisation forcée des suppressions en attente avant un changement de mois réussi et avant la fermeture normale de la fenêtre (commit `8a7dde4`). Un refus de fermeture ne lance aucune finalisation.
 - Filtre par catégorie lié au graphique, avec puce « Filtre actif » supprimable.
 - Liste sans puces, une ligne par opération : libellé, catégorie, date, montant aligné à droite (`tabular-nums`) (commit `9dc0948`).
-- Bouton de suppression `.ops-delete` : 32 px, `aria-label` renseigné, état désactivé pendant une finalisation.
+- Édition en ligne (commit `119a4e5`) : revenus (libellé, montant, catégorie), dépenses (idem), charges fixes (idem et jour du mois). Dates et mois non modifiables. Une seule ligne en édition à la fois. Validation identique aux formulaires d'ajout. Doublons empêchés pendant l'enregistrement.
+- Brouillon protégé : confirmation avant abandon, seulement si les valeurs ont réellement changé. Refus = état et brouillon conservés. Pendant un enregistrement, les transitions (mois, filtre, autre ligne, fermeture) sont bloquées.
+- Erreur SQL affichée sur la ligne, saisies conservées. Après un succès, cartes, graphique et listes sont actualisés, l'édition se termine, un message signale si la ligne sort du filtre actif ou passe en épargne, et le focus revient sur la ligne.
+- Pastilles de catégorie : couleur calculée à partir de l'identifiant, sans écriture en base. « Sans catégorie » est en anneau neutre.
+- Bouton `.ops-delete` : gris au repos, rouge au survol, focus visible, état désactivé, zone de 32 px. Désactivé sur la ligne en édition.
+- États vides distincts : « aucune opération » et « aucune opération pour ce filtre », avec le bouton « Retirer le filtre » seulement dans le second cas.
 
-Réalisé mais non testé dans certains scénarios :
-- Échec SQL pendant une suppression, et échec de fermeture simulé : la logique est couverte par des tests automatisés sur la file et la garde, mais **non testée dans Tauri**. Ces scénarios ne sont pas déclarés validés.
-
-Restant à faire :
-- **Pastilles de catégorie** : absentes des lignes. La catégorie s'affiche en texte. Écart avec le plan initial, à traiter.
-- **Boutons-icônes** : le bouton est cohérent (taille, `aria-label`), mais il n'a pas d'état de survol (rouge au survol) ni de style de focus visible explicite. La classe `.btn-icon` n'est pas utilisée ; ce n'est pas une obligation, seule la cohérence compte.
-- **Édition en ligne** d'une opération (libellé, montant, catégorie) : non réalisée. Elle demande une proposition préalable (types concernés, Enregistrer/Annuler, validation, erreurs SQL, interactions avec filtres, tris et suppressions en attente).
-- **États vides** : messages présents, mais présentation non travaillée.
-
----
+Limites conservées :
+- Erreurs SQL simulées (suppression, ajout, édition, bascule) et fermeture simulée : non testées dans Tauri.
+- Perte de focus et démontage temporaire du formulaire pendant un rechargement : limite connue, non corrigée.
+- Contraste des pastilles et de la palette : non audité (phase 7).
+- Pas de touche Échap pour annuler une édition.
 
 ## Phase 7 : Navigation et accessibilité
 
-**Statut : non réalisée (hors les `aria-label` des boutons de suppression et le libellé des revenus et dépenses).**
+**Statut : non commencée.** Les `aria-label` des boutons de suppression et de modification et les libellés des formulaires sont déjà en place ; le reste de la phase n'est pas commencé.
 
 Restant à faire :
 - Remplacer ou compléter le `input type="month"` par des flèches ‹ › : état `month` au format `-MM-YYYY` et helper `addMonths`.
@@ -166,7 +166,8 @@ Restant à faire :
 
 **Hors plan, à suivre :**
 - Formulaires Objectifs et Dettes : en lecture DOM, sans messages d'erreur reliés aux champs. La barre de dette est toujours à 100 %, faute de remboursements enregistrés. Amélioration éventuelle, distincte.
-- Chargement mensuel : une réponse obsolète peut écraser les données d'un changement de mois récent (voir le diagnostic transmis).
+- Chargement mensuel : corrigé (`f148113`), les réponses obsolètes sont ignorées.
+- Perte de focus et démontage temporaire du formulaire d'édition pendant un rechargement : limite connue, à évaluer.
 - Version de `@tauri-apps/api` : installée 2.11.1, demandée 2.11.5 dans `package.json`.
 - Règle date/mois des revenus : un revenu est enregistré avec la date du jour, dans le mois affiché. Règle inchangée, à discuter.
 
@@ -180,7 +181,7 @@ Restant à faire :
 | 3 | `feat(ui): graphique trié, valeurs, infobulles, filtre au clic` | `74d838a` |
 | 4 | `feat(ui): graphique pleine largeur et listes d'opérations côte à côte` | `9dc0948` |
 | 5 | `feat(ui): formulaires avec labels, validation et feedback` | `bc839ac` |
-| 6 | `fix(ui)`, `fix(budget)` : suppression différée, finalisation avant navigation et fermeture | `e9ac9f8`, `8a7dde4` |
+| 6 | `fix(ui)`, `fix(budget)` : suppression différée, finalisation avant navigation et fermeture | `e9ac9f8`, `8a7dde4`, `119a4e5` |
 | 7 | `feat(a11y): navigation de mois, focus, contrastes` | Non commencé |
 | 8 | un commit par fonctionnalité | Non commencé |
 
