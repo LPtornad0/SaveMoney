@@ -177,3 +177,110 @@ button {
     background-color: var(--surface-border);
   }
 }
+/* Formulaires du tableau de bord */
+.form-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+  gap: var(--spacing-2);
+}
+
+.form-field {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-1);
+}
+
+.form-field label {
+  font-size: var(--text-sm);
+  color: var(--text-secondary);
+}
+
+.form-actions {
+  grid-column: 1 / -1;
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  align-items: center;
+  gap: var(--spacing-2);
+}
+
+.field-error {
+  margin: 0;
+  color: var(--color-expense);
+  font-size: var(--text-xs);
+}
+
+.btn-primary {
+  padding: var(--spacing-2) var(--spacing-3);
+  border: none;
+  border-radius: var(--radius-md);
+  background: var(--color-income);
+  color: var(--text-primary);
+  cursor: pointer;
+}
+
+.btn-primary:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.form-input {
+  box-sizing: border-box;
+  width: 100%;
+  min-width: 0;
+  font: inherit;
+  padding: var(--spacing-2);
+  border-radius: var(--radius-md);
+  border: 1px solid var(--surface-border);
+  background: var(--surface-card);
+  color: var(--text-primary);
+}
+
+.form-input[aria-invalid="true"] {
+  border-color: var(--color-expense);
+}
+
+.form-input:focus-visible,
+.btn-primary:focus-visible,
+.toast-action:focus-visible {
+  outline: 2px solid var(--color-income);
+  outline-offset: 2px;
+}
+
+.toast-region {
+  position: fixed;
+  right: var(--spacing-3);
+  bottom: var(--spacing-3);
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-2);
+  z-index: 1000;
+  max-width: min(360px, calc(100vw - 2 * var(--spacing-3)));
+}
+
+.toast {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-2);
+  padding: var(--spacing-2) var(--spacing-3);
+  border-radius: var(--radius-md);
+  color: #FFFFFF;
+  background: var(--color-income);
+  box-shadow: 0 4px 6px rgba(0, 0, 0, 0.3);
+}
+
+.toast-error {
+  background: var(--color-expense);
+}
+
+.toast-action {
+  margin-left: auto;
+  background: none;
+  border: none;
+  color: #FFFFFF;
+  font: inherit;
+  font-weight: 600;
+  text-decoration: underline;
+  cursor: pointer;
+  padding: 0;
+}

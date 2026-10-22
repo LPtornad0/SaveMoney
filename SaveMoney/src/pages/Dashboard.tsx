@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useRef, useState, type FormEvent } from "react";
 import { Bar } from "react-chartjs-2";
 import {
   Chart as ChartJS,
@@ -13,11 +13,61 @@ import { useMonthlyBudget } from "../hooks/useMonthlyBudget";
 import { useGoals } from "../hooks/useGoals";
 import { useDebts } from "../hooks/useDebts";
 import { formatEUR } from "../utils/formatEUR";
+import { isValidCalendarDate, monthOfDate, parseAmount, parseDayOfMonth } from "../utils/formValidation";
 
 ChartJS.register(BarElement, CategoryScale, LinearScale, Tooltip, Legend);
 
 function currentMonth(): string {
   return new Date().toISOString().slice(0, 7); // "2026-08"
+}
+
+type FormKind = "income" | "expense" | "recurring";
+
+const LABEL_REQUIRED = "Le libellé est requis";
+const AMOUNT_INVALID = "Saisissez un montant supérieur à 0";
+const DATE_REQUIRED = "Choisissez une date valide";
+const DAY_INVALID = "Saisissez un jour entier entre 1 et 31";
+const SAVE_ERROR_MESSAGE = "L'enregistrement a échoué. Vos saisies sont conservées.";
+
+type ToastTone = "success" | "error";
+
+interface ToastItem {
+  id: number;
+  message: string;
+  tone: ToastTone;
+  action?: { label: string; run: () => void };
+}
+
+// Rendered outside the loading guard so a toast stays visible while data reloads.
+function ToastRegion({ toasts, onDismiss }: { toasts: ToastItem[]; onDismiss: (id: number) => void }) {
+  return (
+    <div className="toast-region" aria-live="polite">
+      {toasts.map((toast) => {
+        const action = toast.action;
+        return (
+          <div key={toast.id} role={toast.tone === "error" ? "alert" : "status"} className={`toast toast-${toast.tone}`}>
+            <span>{toast.message}</span>
+            {action && (
+              <button
+                type="button"
+                className="toast-action"
+                onClick={() => {
+                  action.run();
+                  onDismiss(toast.id);
+                }}
+              >
+                {action.label}
+              </button>
+            )}
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+function formatMonthLabel(yearMonth: string): string {
+  return new Date(`${yearMonth}-01T00:00:00`).toLocaleDateString("fr-FR", { month: "long", year: "numeric" });
 }
 
 export default function Dashboard() {
@@ -78,12 +128,74 @@ export default function Dashboard() {
   // Active category filter (from chart click)
   const [activeFilterCategory, setActiveFilterCategory] = useState<string | null>(null);
 
+  // Save state: the ref blocks a second submit before React re-renders
+  const savingRef = useRef(false);
+  const [savingForm, setSavingForm] = useState<FormKind | null>(null);
+  const [formError, setFormError] = useState<{ form: FormKind; message: string } | null>(null);
+  const incomeLabelRef = useRef<HTMLInputElement>(null);
+  const expenseLabelRef = useRef<HTMLInputElement>(null);
+  const recurringLabelRef = useRef<HTMLInputElement>(null);
+
+  // Focus requested by a successful save, applied once the data has reloaded
+  const pendingFocusRef = useRef<FormKind | null>(null);
+
+  // Toasts are React state, each with its own timer
+  const [toasts, setToasts] = useState<ToastItem[]>([]);
+  const toastIdRef = useRef(0);
+  const toastTimersRef = useRef(new Map<number, ReturnType<typeof setTimeout>>());
+
+  useEffect(() => {
+    const timers = toastTimersRef.current;
+    return () => {
+      timers.forEach((timer) => clearTimeout(timer));
+      timers.clear();
+    };
+  }, []);
+
+  // The form unmounts while data reloads, so focus waits for the reloaded form
+  useEffect(() => {
+    const target = pendingFocusRef.current;
+    if (!target || loading || !data) return;
+    const input =
+      target === "income" ? incomeLabelRef.current
+      : target === "expense" ? expenseLabelRef.current
+      : recurringLabelRef.current;
+    input?.focus();
+    pendingFocusRef.current = null;
+  }, [loading, data]);
+
+  const dismissToast = (id: number) => {
+    const timer = toastTimersRef.current.get(id);
+    if (timer !== undefined) {
+      clearTimeout(timer);
+      toastTimersRef.current.delete(id);
+    }
+    setToasts((prev) => prev.filter((toast) => toast.id !== id));
+  };
+
+  const showToast = (message: string, tone: ToastTone = "success", action?: ToastItem["action"], durationMs = 3000) => {
+    toastIdRef.current += 1;
+    const id = toastIdRef.current;
+    setToasts((prev) => [...prev, { id, message, tone, action }]);
+    toastTimersRef.current.set(id, setTimeout(() => dismissToast(id), durationMs));
+  };
+
   if (loading || goalsLoading || debtsLoading || !data || !goalsData || !debtsData) {
-    return <div style={{ padding: "2rem", color: "white" }}>Chargement...</div>;
+    return (
+      <>
+        <div style={{ padding: "2rem", color: "white" }}>Chargement...</div>
+        <ToastRegion toasts={toasts} onDismiss={dismissToast} />
+      </>
+    );
   }
 
   if (error || goalsError || debtsError) {
-    return <div style={{ padding: "2rem", color: "#fca5a5" }}>{error || goalsError || debtsError}</div>;
+    return (
+      <>
+        <div style={{ padding: "2rem", color: "#fca5a5" }}>{error || goalsError || debtsError}</div>
+        <ToastRegion toasts={toasts} onDismiss={dismissToast} />
+      </>
+    );
   }
 
   const incomeCategories = data.categories.filter((c) => c.type === "income");
@@ -111,152 +223,120 @@ export default function Dashboard() {
       })
     : data.recurringExpenses;
 
-  async function addIncome() {
-    // Reset errors
-    setIncomeLabelError("");
-    setIncomeAmountError("");
-
-    // Validation
-    let isValid = true;
-    if (!incomeLabel || incomeLabel.trim() === "") {
-      setIncomeLabelError("Le libellé est requis");
-      isValid = false;
+  // Runs one save at a time; a second submit while saving is ignored.
+  async function runSave(form: FormKind, save: () => Promise<void>): Promise<boolean> {
+    if (savingRef.current) return false;
+    savingRef.current = true;
+    setSavingForm(form);
+    setFormError(null);
+    try {
+      await save();
+      return true;
+    } catch (err) {
+      console.error(`Failed to save ${form}`, err);
+      setFormError({ form, message: SAVE_ERROR_MESSAGE });
+      showToast(SAVE_ERROR_MESSAGE, "error");
+      return false;
+    } finally {
+      savingRef.current = false;
+      setSavingForm(null);
     }
-    const amountValue = parseFloat(incomeAmount);
-    if (!incomeAmount || isNaN(amountValue) || amountValue <= 0) {
-      setIncomeAmountError("Veuillez entrer un montant valide supérieur à 0");
-      isValid = false;
-    }
+  }
 
-    if (!isValid) return;
+  async function handleIncomeSubmit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const label = incomeLabel.trim();
+    const amount = parseAmount(incomeAmount);
+    setIncomeLabelError(label ? "" : LABEL_REQUIRED);
+    setIncomeAmountError(amount === null ? AMOUNT_INVALID : "");
+    if (!label || amount === null) return;
 
-    const db = await getDb();
-    const today = new Date().toISOString().slice(0, 10);
-    await db.execute(
-      "INSERT INTO incomes (date, month, label, amount, category_id) VALUES (?, ?, ?, ?, ?)",
-      [today, month, incomeLabel.trim(), amountValue, incomeCategory || null]
-    );
+    const saved = await runSave("income", async () => {
+      const db = await getDb();
+      const today = new Date().toISOString().slice(0, 10);
+      await db.execute(
+        "INSERT INTO incomes (date, month, label, amount, category_id) VALUES (?, ?, ?, ?, ?)",
+        [today, month, label, amount, incomeCategory || null]
+      );
+    });
+    if (!saved) return;
 
-    // Reset form
     setIncomeLabel("");
     setIncomeAmount("");
     setIncomeCategory("");
-
-    // Focus on first field
-    const labelInput = document.getElementById('income-label-input');
-    if (labelInput) {
-      labelInput.focus();
-    }
-
-    // Show toast (simplified - in a real app you'd use a proper toast library)
     showToast("Revenu ajouté avec succès");
-
+    pendingFocusRef.current = "income";
     refresh();
   }
 
-  async function addExpense() {
-    // Reset errors
-    setExpenseLabelError("");
-    setExpenseAmountError("");
-    setExpenseDateError("");
+  async function handleExpenseSubmit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const label = expenseLabel.trim();
+    const amount = parseAmount(expenseAmount);
+    const date = expenseDate;
+    const dateValid = isValidCalendarDate(date);
+    setExpenseLabelError(label ? "" : LABEL_REQUIRED);
+    setExpenseAmountError(amount === null ? AMOUNT_INVALID : "");
+    setExpenseDateError(dateValid ? "" : DATE_REQUIRED);
+    if (!label || amount === null || !dateValid) return;
 
-    // Validation
-    let isValid = true;
-    if (!expenseLabel || expenseLabel.trim() === "") {
-      setExpenseLabelError("Le libellé est requis");
-      isValid = false;
-    }
-    const amountValue = parseFloat(expenseAmount);
-    if (!expenseAmount || isNaN(amountValue) || amountValue <= 0) {
-      setExpenseAmountError("Veuillez entrer un montant valide supérieur à 0");
-      isValid = false;
-    }
-    if (!expenseDate) {
-      setExpenseDateError("La date est requise");
-      isValid = false;
+    // The expense is always stored in the month of its date.
+    const targetMonth = monthOfDate(date);
+    const monthChanged = targetMonth !== month;
+    if (monthChanged && !window.confirm(
+      `Cette dépense est datée de ${formatMonthLabel(targetMonth)}, mais vous consultez ${formatMonthLabel(month)}.\n\nEnregistrer la dépense dans ${formatMonthLabel(targetMonth)} ?`
+    )) {
+      return;
     }
 
-    if (!isValid) return;
+    const saved = await runSave("expense", async () => {
+      const db = await getDb();
+      await db.execute(
+        "INSERT INTO expenses (date, month, label, amount, category_id) VALUES (?, ?, ?, ?, ?)",
+        [date, targetMonth, label, amount, expenseCategory || null]
+      );
+    });
+    if (!saved) return;
 
-    const db = await getDb();
-    // Use the selected date instead of today's date
-    const selectedDate = expenseDate;
-    const month = selectedDate.slice(0, 7); // Extract YYYY-MM from date
-
-    await db.execute(
-      "INSERT INTO expenses (date, month, label, amount, category_id) VALUES (?, ?, ?, ?, ?)",
-      [selectedDate, month, expenseLabel.trim(), amountValue, expenseCategory || null]
-    );
-
-    // Reset form
     setExpenseLabel("");
     setExpenseAmount("");
     setExpenseDate("");
     setExpenseCategory("");
-
-    // Focus on first field
-    const labelInput = document.getElementById('expense-label-input');
-    if (labelInput) {
-      labelInput.focus();
-    }
-
-    // Show toast
     showToast("Dépense ajoutée avec succès");
-
-    refresh();
+    pendingFocusRef.current = "expense";
+    if (monthChanged) {
+      // Switching month reloads the data through useMonthlyBudget.
+      setMonth(targetMonth);
+    } else {
+      refresh();
+    }
   }
 
-  async function addRecurring() {
-    // Reset errors
-    setRecurringLabelError("");
-    setRecurringAmountError("");
-    setRecurringDayError("");
+  async function handleRecurringSubmit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const label = recurringLabel.trim();
+    const amount = parseAmount(recurringAmount);
+    const day = parseDayOfMonth(recurringDay);
+    setRecurringLabelError(label ? "" : LABEL_REQUIRED);
+    setRecurringAmountError(amount === null ? AMOUNT_INVALID : "");
+    setRecurringDayError(day === null ? DAY_INVALID : "");
+    if (!label || amount === null || day === null) return;
 
-    // Validation
-    let isValid = true;
-    if (!recurringLabel || recurringLabel.trim() === "") {
-      setRecurringLabelError("Le libellé est requis");
-      isValid = false;
-    }
-    const amountValue = parseFloat(recurringAmount);
-    if (!recurringAmount || isNaN(amountValue) || amountValue <= 0) {
-      setRecurringAmountError("Veuillez entrer un montant valide supérieur à 0");
-      isValid = false;
-    }
-    const dayValue = parseInt(recurringDay, 10);
-    if (!recurringDay || isNaN(dayValue) || dayValue < 1 || dayValue > 31) {
-      setRecurringDayError("Veuillez entrer un jour valide entre 1 et 31");
-      isValid = false;
-    }
+    const saved = await runSave("recurring", async () => {
+      const db = await getDb();
+      await db.execute(
+        "INSERT INTO recurring_expenses (label, amount, category_id, day_of_month, active) VALUES (?, ?, ?, ?, 1)",
+        [label, amount, recurringCategory || null, day]
+      );
+    });
+    if (!saved) return;
 
-    if (!isValid) return;
-
-    const db = await getDb();
-    await db.execute(
-      "INSERT INTO recurring_expenses (label, amount, category_id, day_of_month, active) VALUES (?, ?, ?, ?, 1)",
-      [
-        recurringLabel.trim(),
-        amountValue,
-        recurringCategory || null,
-        dayValue,
-      ]
-    );
-
-    // Reset form
     setRecurringLabel("");
     setRecurringAmount("");
     setRecurringCategory("");
     setRecurringDay("1");
-
-    // Focus on first field
-    const labelInput = document.getElementById('recurring-label-input');
-    if (labelInput) {
-      labelInput.focus();
-    }
-
-    // Show toast
     showToast("Charge fixe ajoutée avec succès");
-
+    pendingFocusRef.current = "recurring";
     refresh();
   }
 
@@ -360,55 +440,9 @@ export default function Dashboard() {
     showToast("Suppression annulée");
   }
 
-  // Show toast with undo option
+  // Undo toast: the deletion itself is unchanged, only the toast is rendered by React
   function showToastWithUndo(message: string, undoAction: () => void) {
-    // Simple toast implementation with undo button
-    const toast = document.createElement('div');
-    toast.innerHTML = `
-      <div style="display: flex; align-items: center; gap: 8px;">
-        <span>${message}</span>
-        <button onclick="this.closest('.toast').remove(); (${undoAction.toString()})();"
-                style="background: none; border: none; color: var(--color-income); cursor: pointer; padding: 0;">
-          Annuler
-        </button>
-      </div>
-    `;
-    toast.style.cssText = `
-      position: fixed;
-      bottom: 20px;
-      right: 20px;
-      background: var(--color-income);
-      color: white;
-      padding: var(--spacing-2) var(--spacing-3);
-      border-radius: var(--radius-md);
-      box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
-      z-index: 1000;
-      opacity: 0;
-      transform: translateY(10px);
-      transition: opacity 0.3s ease, transform 0.3s ease;
-      font-family: inherit;
-    `;
-
-    // Add the toast to the body
-    document.body.appendChild(toast);
-
-    // Trigger reflow to enable transition
-    void toast.offsetWidth;
-
-    // Show toast
-    toast.style.opacity = '1';
-    toast.style.transform = 'translateY(0)';
-
-    // Hide toast after 5 seconds
-    setTimeout(() => {
-      toast.style.opacity = '0';
-      toast.style.transform = 'translateY(10px)';
-      setTimeout(() => {
-        if (toast.parentNode) {
-          toast.parentNode.removeChild(toast);
-        }
-      }, 300);
-    }, 5000);
+    showToast(message, "success", { label: "Annuler", run: undoAction }, 5000);
   }
 
   // Helper function to identify savings categories (same as in hook)
@@ -490,44 +524,6 @@ export default function Dashboard() {
     cursor: 'pointer',
   };
 
-  const showToast = (message: string) => {
-    // Simple toast implementation - in a real app you'd use a proper toast library
-    const toast = document.createElement('div');
-    toast.textContent = message;
-    toast.style.cssText = `
-      position: fixed;
-      bottom: 20px;
-      right: 20px;
-      background: var(--color-income);
-      color: white;
-      padding: var(--spacing-2) var(--spacing-3);
-      border-radius: var(--radius-md);
-      box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
-      z-index: 1000;
-      opacity: 0;
-      transform: translateY(10px);
-      transition: opacity 0.3s ease, transform 0.3s ease;
-    `;
-    document.body.appendChild(toast);
-
-    // Trigger reflow to enable transition
-    void toast.offsetWidth;
-
-    // Show toast
-    toast.style.opacity = '1';
-    toast.style.transform = 'translateY(0)';
-
-    // Hide toast after 3 seconds
-    setTimeout(() => {
-      toast.style.opacity = '0';
-      toast.style.transform = 'translateY(10px)';
-      setTimeout(() => {
-        if (toast.parentNode) {
-          toast.parentNode.removeChild(toast);
-        }
-      }, 300);
-    }, 3000);
-  };
 
   return (
     <main style={{
@@ -1017,33 +1013,42 @@ export default function Dashboard() {
         {/* Revenu */}
         <div style={cardStyle}>
           <h3>Ajouter un revenu</h3>
-          <div style={{ display: "grid", gap: 'var(--spacing-2)', gridTemplateColumns: "repeat(auto-fill, minmax(200px, 1fr))" }}>
-            <div>
-              <label>Libellé</label>
+          <form className="form-grid" onSubmit={handleIncomeSubmit} noValidate>
+            <div className="form-field">
+              <label htmlFor="income-label-input">Libellé</label>
               <input
                 id="income-label-input"
-                style={inputStyle}
+                ref={incomeLabelRef}
+                className="form-input"
                 placeholder="Ex: Salaire, Freelance..."
                 value={incomeLabel}
                 onChange={(e) => setIncomeLabel(e.target.value)}
+                aria-invalid={incomeLabelError ? true : undefined}
+                aria-describedby={incomeLabelError ? "income-label-error" : undefined}
               />
-              {incomeLabelError && <p style={{ color: 'var(--color-expense)', fontSize: 'var(--text-xs)', marginTop: 'var(--spacing-1)' }}>{incomeLabelError}</p>}
+              {incomeLabelError && <p id="income-label-error" className="field-error">{incomeLabelError}</p>}
             </div>
-            <div>
-              <label>Montant (€)</label>
+            <div className="form-field">
+              <label htmlFor="income-amount-input">Montant (€)</label>
               <input
-                style={inputStyle}
+                id="income-amount-input"
+                className="form-input"
                 placeholder="Ex: 1500,00"
                 type="number"
+                step="0.01"
+                min="0"
                 value={incomeAmount}
                 onChange={(e) => setIncomeAmount(e.target.value)}
+                aria-invalid={incomeAmountError ? true : undefined}
+                aria-describedby={incomeAmountError ? "income-amount-error" : undefined}
               />
-              {incomeAmountError && <p style={{ color: 'var(--color-expense)', fontSize: 'var(--text-xs)', marginTop: 'var(--spacing-1)' }}>{incomeAmountError}</p>}
+              {incomeAmountError && <p id="income-amount-error" className="field-error">{incomeAmountError}</p>}
             </div>
-            <div>
-              <label>Catégorie (optionnel)</label>
+            <div className="form-field">
+              <label htmlFor="income-category-input">Catégorie (optionnel)</label>
               <select
-                style={inputStyle}
+                id="income-category-input"
+                className="form-input"
                 value={incomeCategory}
                 onChange={(e) => setIncomeCategory(e.target.value)}
               >
@@ -1055,12 +1060,13 @@ export default function Dashboard() {
                 ))}
               </select>
             </div>
-            <div style={{ gridColumn: "1 / -1", display: "flex", justifyContent: "flex-end" }}>
-              <button style={btnStyle} onClick={addIncome}>
-                Ajouter
+            <div className="form-actions">
+              {formError?.form === "income" && <p role="alert" className="field-error">{formError.message}</p>}
+              <button type="submit" className="btn-primary" disabled={savingForm !== null}>
+                {savingForm === "income" ? "Enregistrement…" : "Ajouter"}
               </button>
             </div>
-          </div>
+          </form>
 
           <div>
             {/* Income list */}
@@ -1164,48 +1170,59 @@ export default function Dashboard() {
         </div>
         <div style={cardStyle}>
           <h3>Ajouter une dépense</h3>
-          <div style={{ display: "grid", gap: 'var(--spacing-2)', gridTemplateColumns: "repeat(auto-fill, minmax(200px, 1fr))" }}>
-            <div>
-              <label>Libellé</label>
+          <form className="form-grid" onSubmit={handleExpenseSubmit} noValidate>
+            <div className="form-field">
+              <label htmlFor="expense-label-input">Libellé</label>
               <input
                 id="expense-label-input"
-                style={inputStyle}
+                ref={expenseLabelRef}
+                className="form-input"
                 placeholder="Ex: Supermarché, Transport..."
                 value={expenseLabel}
                 onChange={(e) => setExpenseLabel(e.target.value)}
+                aria-invalid={expenseLabelError ? true : undefined}
+                aria-describedby={expenseLabelError ? "expense-label-error" : undefined}
               />
-              {expenseLabelError && <p style={{ color: 'var(--color-expense)', fontSize: 'var(--text-xs)', marginTop: 'var(--spacing-1)' }}>{expenseLabelError}</p>}
+              {expenseLabelError && <p id="expense-label-error" className="field-error">{expenseLabelError}</p>}
             </div>
-            <div>
-              <label>Date</label>
+            <div className="form-field">
+              <label htmlFor="expense-date-input">Date</label>
               <input
                 id="expense-date-input"
-                style={inputStyle}
+                className="form-input"
                 type="date"
                 value={expenseDate}
                 onChange={(e) => setExpenseDate(e.target.value)}
+                aria-invalid={expenseDateError ? true : undefined}
+                aria-describedby={expenseDateError ? "expense-date-error" : undefined}
               />
-              {expenseDateError && <p style={{ color: 'var(--color-expense)', fontSize: 'var(--text-xs)', marginTop: 'var(--spacing-1)' }}>{expenseDateError}</p>}
+              {expenseDateError && <p id="expense-date-error" className="field-error">{expenseDateError}</p>}
             </div>
-            <div>
-              <label>Montant (€)</label>
+            <div className="form-field">
+              <label htmlFor="expense-amount-input">Montant (€)</label>
               <input
-                style={inputStyle}
+                id="expense-amount-input"
+                className="form-input"
                 placeholder="Ex: 15,50"
                 type="number"
+                step="0.01"
+                min="0"
                 value={expenseAmount}
                 onChange={(e) => setExpenseAmount(e.target.value)}
+                aria-invalid={expenseAmountError ? true : undefined}
+                aria-describedby={expenseAmountError ? "expense-amount-error" : undefined}
               />
-              {expenseAmountError && <p style={{ color: 'var(--color-expense)', fontSize: 'var(--text-xs)', marginTop: 'var(--spacing-1)' }}>{expenseAmountError}</p>}
+              {expenseAmountError && <p id="expense-amount-error" className="field-error">{expenseAmountError}</p>}
             </div>
-            <div>
-              <label>Catégorie</label>
+            <div className="form-field">
+              <label htmlFor="expense-category-input">Catégorie (optionnel)</label>
               <select
-                style={inputStyle}
+                id="expense-category-input"
+                className="form-input"
                 value={expenseCategory}
                 onChange={(e) => setExpenseCategory(e.target.value)}
               >
-                <option value="">Catégorie</option>
+                <option value="">Aucune catégorie</option>
                 {expenseCategories.map((c) => (
                   <option key={c.id} value={c.id}>
                     {c.name}
@@ -1213,12 +1230,13 @@ export default function Dashboard() {
                 ))}
               </select>
             </div>
-            <div style={{ gridColumn: "1 / -1", display: "flex", justifyContent: "flex-end" }}>
-              <button style={btnStyle} onClick={addExpense}>
-                Ajouter
+            <div className="form-actions">
+              {formError?.form === "expense" && <p role="alert" className="field-error">{formError.message}</p>}
+              <button type="submit" className="btn-primary" disabled={savingForm !== null}>
+                {savingForm === "expense" ? "Enregistrement…" : "Ajouter"}
               </button>
             </div>
-          </div>
+          </form>
 
           <div>
             {/* Expense list */}
@@ -1325,37 +1343,46 @@ export default function Dashboard() {
                 {/* Dépense récurrente */}
         <div style={cardStyle}>
           <h3>Ajouter une charge fixe</h3>
-          <div style={{ display: "grid", gap: 'var(--spacing-2)', gridTemplateColumns: "repeat(auto-fill, minmax(200px, 1fr))" }}>
-            <div>
-              <label>Libellé</label>
+          <form className="form-grid" onSubmit={handleRecurringSubmit} noValidate>
+            <div className="form-field">
+              <label htmlFor="recurring-label-input">Libellé</label>
               <input
                 id="recurring-label-input"
-                style={inputStyle}
+                ref={recurringLabelRef}
+                className="form-input"
                 placeholder="Ex: Loyer, Internet, Abonnement..."
                 value={recurringLabel}
                 onChange={(e) => setRecurringLabel(e.target.value)}
+                aria-invalid={recurringLabelError ? true : undefined}
+                aria-describedby={recurringLabelError ? "recurring-label-error" : undefined}
               />
-              {recurringLabelError && <p style={{ color: 'var(--color-expense)', fontSize: 'var(--text-xs)', marginTop: 'var(--spacing-1)' }}>{recurringLabelError}</p>}
+              {recurringLabelError && <p id="recurring-label-error" className="field-error">{recurringLabelError}</p>}
             </div>
-            <div>
-              <label>Montant (€)</label>
+            <div className="form-field">
+              <label htmlFor="recurring-amount-input">Montant (€)</label>
               <input
-                style={inputStyle}
+                id="recurring-amount-input"
+                className="form-input"
                 placeholder="Ex: 50,00"
                 type="number"
+                step="0.01"
+                min="0"
                 value={recurringAmount}
                 onChange={(e) => setRecurringAmount(e.target.value)}
+                aria-invalid={recurringAmountError ? true : undefined}
+                aria-describedby={recurringAmountError ? "recurring-amount-error" : undefined}
               />
-              {recurringAmountError && <p style={{ color: 'var(--color-expense)', fontSize: 'var(--text-xs)', marginTop: 'var(--spacing-1)' }}>{recurringAmountError}</p>}
+              {recurringAmountError && <p id="recurring-amount-error" className="field-error">{recurringAmountError}</p>}
             </div>
-            <div>
-              <label>Catégorie</label>
+            <div className="form-field">
+              <label htmlFor="recurring-category-input">Catégorie (optionnel)</label>
               <select
-                style={inputStyle}
+                id="recurring-category-input"
+                className="form-input"
                 value={recurringCategory}
                 onChange={(e) => setRecurringCategory(e.target.value)}
               >
-                <option value="">Catégorie</option>
+                <option value="">Aucune catégorie</option>
                 {expenseCategories.map((c) => (
                   <option key={c.id} value={c.id}>
                     {c.name}
@@ -1363,26 +1390,31 @@ export default function Dashboard() {
                 ))}
               </select>
             </div>
-            <div>
-              <label>Jour du mois</label>
+            <div className="form-field">
+              <label htmlFor="recurring-day-input">Jour du mois (1 à 31)</label>
               <input
                 id="recurring-day-input"
-                style={{ ...inputStyle, width: "60px" }}
+                className="form-input"
                 placeholder="Ex: 5"
                 type="number"
+                inputMode="numeric"
                 min="1"
                 max="31"
+                step="1"
                 value={recurringDay}
                 onChange={(e) => setRecurringDay(e.target.value)}
+                aria-invalid={recurringDayError ? true : undefined}
+                aria-describedby={recurringDayError ? "recurring-day-error" : undefined}
               />
-              {recurringDayError && <p style={{ color: 'var(--color-expense)', fontSize: 'var(--text-xs)', marginTop: 'var(--spacing-1)' }}>{recurringDayError}</p>}
+              {recurringDayError && <p id="recurring-day-error" className="field-error">{recurringDayError}</p>}
             </div>
-            <div style={{ gridColumn: "1 / -1", display: "flex", justifyContent: "flex-end" }}>
-              <button style={btnStyle} onClick={addRecurring}>
-                Ajouter
+            <div className="form-actions">
+              {formError?.form === "recurring" && <p role="alert" className="field-error">{formError.message}</p>}
+              <button type="submit" className="btn-primary" disabled={savingForm !== null}>
+                {savingForm === "recurring" ? "Enregistrement…" : "Ajouter"}
               </button>
             </div>
-          </div>
+          </form>
 
           <div>
             {/* Recurring expense list */}
@@ -1543,6 +1575,7 @@ export default function Dashboard() {
           </div>
         </div>
       </section>
+      <ToastRegion toasts={toasts} onDismiss={dismissToast} />
     </main>
   );
 }
