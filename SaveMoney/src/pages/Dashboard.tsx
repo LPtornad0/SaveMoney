@@ -11,6 +11,7 @@ import {
   type Plugin,
 } from "chart.js";
 import { buildChartRows, filterByCategory, isSameFilter, type CategoryFilter } from "../utils/chartRows";
+import { buildOperations, formatShortDate, sortRecurring } from "../utils/operations";
 import { getDb } from "../db/client";
 import { useMonthlyBudget } from "../hooks/useMonthlyBudget";
 import { useGoals } from "../hooks/useGoals";
@@ -319,6 +320,16 @@ export default function Dashboard() {
   const filteredExpenses = filterByCategory(data.expenses, activeFilter, data.categories);
   const filteredRecurringExpenses = filterByCategory(data.recurringExpenses, activeFilter, data.categories);
 
+  // Entries whose deletion is pending are hidden at once, as before
+  const isPendingDeletion = (id: number, type: DeletableType) =>
+    pendingDeletions.some((item) => item.id === id && item.type === type);
+  const operations = buildOperations(filteredIncomes, filteredExpenses).filter(
+    (op) => !isPendingDeletion(op.id, op.kind)
+  );
+  const recurringRows = sortRecurring(filteredRecurringExpenses).filter(
+    (rec) => !isPendingDeletion(rec.id, "recurring")
+  );
+
   // Runs one save at a time; a second submit while saving is ignored.
   async function runSave(form: FormKind, save: () => Promise<void>): Promise<boolean> {
     if (savingRef.current || navigatingRef.current) return false;
@@ -607,6 +618,8 @@ export default function Dashboard() {
   };
 
   const chartOptions: ChartOptions<"bar"> = {
+    // The chart fills its responsive container instead of a fixed size
+    maintainAspectRatio: false,
     layout: { padding: { top: 24 } },
     plugins: {
       legend: { display: false },
@@ -652,6 +665,7 @@ export default function Dashboard() {
     padding: 'var(--spacing-3)',
     borderRadius: "12px",
     flex: 1,
+    minWidth: 160,
   };
 
   const inputStyle: React.CSSProperties = {
@@ -674,7 +688,7 @@ export default function Dashboard() {
 
 
   return (
-    <main style={{
+    <main className="app-container" style={{
       padding: 'var(--spacing-5)',
       color: 'var(--text-primary)',
       background: 'var(--surface-background)',
@@ -694,7 +708,7 @@ export default function Dashboard() {
       </div>
 
       {/* Blocs résumé */}
-      <section style={{ display: "flex", gap: 'var(--spacing-3)', marginBottom: 'var(--spacing-5)' }}>
+      <section style={{ display: "flex", flexWrap: "wrap", gap: 'var(--spacing-3)', marginBottom: 'var(--spacing-5)' }}>
         <div style={{ ...cardStyle, background: 'var(--color-available)' }}>
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--spacing-1)' }}>
@@ -814,6 +828,142 @@ export default function Dashboard() {
           </p>
         </div>
       </section>
+
+      <div className="dashboard-main">
+      {/* Graphique */}
+      <section className="chart-card">
+        <h2>Dépenses et charges fixes par catégorie — hors épargne</h2>
+        {chartRows.length === 0 ? (
+          <p style={{ color: 'var(--text-secondary)' }}>
+            Aucune dépense ni charge fixe catégorisée pour ce mois.
+          </p>
+        ) : (
+          <div className="chart-box">
+            <Bar data={chartData} options={chartOptions} />
+          </div>
+        )}
+        {/* Show active filter if any */}
+        {activeFilter !== null && (
+          <div style={{
+            display: 'flex',
+            alignItems: 'center',
+            gap: 'var(--spacing-1)',
+            background: 'var(--surface-card)',
+            padding: 'var(--spacing-2)',
+            borderRadius: 'var(--radius-md)',
+            marginBottom: 'var(--spacing-3)',
+            fontSize: 'var(--text-sm)'
+          }}>
+            <span>Filtre actif : </span>
+            <span style={{
+              background: 'var(--color-income)',
+              color: 'white',
+              padding: 'var(--spacing-1) var(--spacing-2)',
+              borderRadius: 'var(--radius-sm)',
+              fontWeight: 500
+            }}>
+              {activeFilterLabel}
+            </span>
+            <button
+              onClick={() => {
+                setActiveFilter(null);
+                showToast("Filtre supprimé");
+              }}
+              aria-label="Supprimer le filtre"
+              title="Supprimer le filtre"
+              style={{
+                background: 'none',
+                border: 'none',
+                color: 'var(--text-secondary)',
+                cursor: 'pointer',
+                padding: 'var(--spacing-1)',
+                fontSize: 'var(--text-xs)'
+              }}
+            >
+              ×
+            </button>
+          </div>
+        )}
+      </section>
+        <div className="ops-pair">
+          <section className="ops-card">
+            <h2>Opérations du mois</h2>
+            {operations.length === 0 ? (
+              <p className="ops-empty">
+                {activeFilter === null
+                  ? "Aucune opération enregistrée pour ce mois."
+                  : "Aucune opération pour cette catégorie ce mois-ci."}
+              </p>
+            ) : (
+              <div className="ops-scroll" role="region" aria-label="Liste des revenus et dépenses" tabIndex={0}>
+                <ul className="ops-list">
+                  {operations.map((op) => {
+                    const categoryName = data.categories.find((cat) => cat.id === op.category_id)?.name ?? "Sans catégorie";
+                    const kindLabel = op.kind === "income" ? "Revenu" : "Dépense";
+                    return (
+                      <li key={op.key} className="ops-row">
+                        <span className={`ops-kind ops-kind-${op.kind}`}>{kindLabel}</span>
+                        <span className="ops-label">{op.label}</span>
+                        <span className="ops-meta">{categoryName} · {formatShortDate(op.date)}</span>
+                        <span className="ops-amount">{formatEUR(op.amount)}</span>
+                        <button
+                          type="button"
+                          className="ops-delete"
+                          onClick={() => deleteWithUndo(op.id, op.kind)}
+                          disabled={navigating}
+                          aria-label={`Supprimer ${kindLabel.toLowerCase()} : ${op.label}`}
+                          title="Supprimer"
+                        >
+                          ×
+                        </button>
+                      </li>
+                    );
+                  })}
+                </ul>
+              </div>
+            )}
+          </section>
+
+          <section className="ops-card">
+            <h2>Charges fixes actives</h2>
+            {recurringRows.length === 0 ? (
+              <p className="ops-empty">
+                {activeFilter === null
+                  ? "Aucune charge fixe active."
+                  : "Aucune charge fixe active pour cette catégorie."}
+              </p>
+            ) : (
+              <div className="ops-scroll" role="region" aria-label="Liste des charges fixes actives" tabIndex={0}>
+                <ul className="ops-list">
+                  {recurringRows.map((rec) => {
+                    const categoryName = data.categories.find((cat) => cat.id === rec.category_id)?.name ?? "Sans catégorie";
+                    return (
+                      <li key={`recurring-${rec.id}`} className="ops-row">
+                        <span className="ops-kind ops-kind-recurring">Charge fixe</span>
+                        <span className="ops-label">{rec.label}</span>
+                        <span className="ops-meta">
+                          {categoryName} · {rec.day_of_month !== null ? `le ${rec.day_of_month} du mois` : "jour non défini"}
+                        </span>
+                        <span className="ops-amount">{formatEUR(rec.amount)}</span>
+                        <button
+                          type="button"
+                          className="ops-delete"
+                          onClick={() => deleteWithUndo(rec.id, "recurring")}
+                          disabled={navigating}
+                          aria-label={`Supprimer la charge fixe : ${rec.label}`}
+                          title="Supprimer"
+                        >
+                          ×
+                        </button>
+                      </li>
+                    );
+                  })}
+                </ul>
+              </div>
+            )}
+          </section>
+        </div>
+      </div>
 
       {/* Objectifs */}
       <section style={{ marginBottom: 'var(--spacing-5)' }}>
@@ -1092,63 +1242,8 @@ export default function Dashboard() {
         </div>
       </section>
 
-      {/* Graphique */}
-      <section style={{ maxWidth: 700, marginBottom: 'var(--spacing-5)' }}>
-        <h2>Dépenses et charges fixes par catégorie — hors épargne</h2>
-        {chartRows.length === 0 ? (
-          <p style={{ color: 'var(--text-secondary)' }}>
-            Aucune dépense ni charge fixe catégorisée pour ce mois.
-          </p>
-        ) : (
-          <Bar data={chartData} options={chartOptions} />
-        )}
-        {/* Show active filter if any */}
-        {activeFilter !== null && (
-          <div style={{
-            display: 'flex',
-            alignItems: 'center',
-            gap: 'var(--spacing-1)',
-            background: 'var(--surface-card)',
-            padding: 'var(--spacing-2)',
-            borderRadius: 'var(--radius-md)',
-            marginBottom: 'var(--spacing-3)',
-            fontSize: 'var(--text-sm)'
-          }}>
-            <span>Filtre actif : </span>
-            <span style={{
-              background: 'var(--color-income)',
-              color: 'white',
-              padding: 'var(--spacing-1) var(--spacing-2)',
-              borderRadius: 'var(--radius-sm)',
-              fontWeight: 500
-            }}>
-              {activeFilterLabel}
-            </span>
-            <button
-              onClick={() => {
-                setActiveFilter(null);
-                showToast("Filtre supprimé");
-              }}
-              aria-label="Supprimer le filtre"
-              title="Supprimer le filtre"
-              style={{
-                background: 'none',
-                border: 'none',
-                color: 'var(--text-secondary)',
-                cursor: 'pointer',
-                padding: 'var(--spacing-1)',
-                fontSize: 'var(--text-xs)'
-              }}
-            >
-              ×
-            </button>
-          </div>
-        )}
-      </section>
-
-      {/* Formulaires */}
-      <section style={{ display: "flex", gap: 'var(--spacing-5)', flexWrap: "wrap", marginBottom: 'var(--spacing-5)' }}>
-        {/* Revenu */}
+      {/* Formulaires d'ajout */}
+      <section className="add-forms">
         <div style={cardStyle}>
           <h3>Ajouter un revenu</h3>
           <form className="form-grid" onSubmit={handleIncomeSubmit} noValidate>
@@ -1205,107 +1300,6 @@ export default function Dashboard() {
               </button>
             </div>
           </form>
-
-          <div>
-            {/* Income list */}
-            {filteredIncomes.length > 0 ? (
-              <>
-                {filteredIncomes.map((income) => {
-                  // Find category name
-                  const categoryName = data.categories
-                    .find(cat => cat.id === income.category_id)?.name || "Sans catégorie";
-
-                  // Check if this income is pending deletion
-                  const isPendingDeletion = pendingDeletions.some(
-                    item => item.id === income.id && item.type === 'income'
-                  );
-
-                  return isPendingDeletion ? null : (
-                      <div key={income.id} style={{
-                      display: 'grid',
-                      gridTemplateColumns: '1fr auto 8px 1fr 80px',
-                      gap: 'var(--spacing-2)',
-                      alignItems: 'center',
-                      padding: 'var(--spacing-1) 0',
-                      borderBottom: '1px solid var(--surface-border)'
-                    }}>
-                      {/* Label */}
-                      <div style={{
-                        overflow: 'hidden',
-                        textOverflow: 'ellipsis',
-                        whiteSpace: 'nowrap'
-                      }}>
-                        {income.label}
-                      </div>
-
-                      {/* Category dot */}
-                      <div style={{
-                        width: 8,
-                        height: 8,
-                        background: categoryName ?
-                          (data.categories.find(cat => cat.name === categoryName)?.color || '#888') :
-                          '#888',
-                        borderRadius: '50%'
-                      }}></div>
-
-                      {/* Date */}
-                      <div style={{
-                        fontSize: 'var(--text-sm)',
-                        color: 'var(--text-secondary)'
-                      }}>
-                        {new Date(income.date).toLocaleDateString('fr-FR', {
-                          day: '2-digit',
-                          month: '2-digit'
-                        })}
-                      </div>
-
-                      {/* Amount */}
-                      <div style={{
-                        fontVariantNumeric: 'tabular-nums',
-                        textAlign: 'right',
-                        fontWeight: 500
-                      }}>
-                        {formatEUR(income.amount)}
-                      </div>
-
-                      {/* Delete button */}
-                      <button
-                        onClick={() => deleteWithUndo(income.id, 'income')}
-                        disabled={navigating}
-                        aria-label="Supprimer ce revenu"
-                        title="Supprimer ce revenu"
-                        style={{
-                          background: 'none',
-                          border: 'none',
-                          color: '#b91c1c',
-                          cursor: 'pointer',
-                          padding: 'var(--spacing-1)',
-                          fontSize: '1.2rem',
-                          lineHeight: 1,
-                          borderRadius: 'var(--radius-md)',
-                          width: 32,
-                          height: 32,
-                          display: 'flex',
-                          alignItems: 'center',
-                          justifyContent: 'center'
-                        }}
-                      >
-                        ×
-                      </button>
-                    </div>
-                  );
-                })}
-              </>
-            ) : (
-              <div style={{
-                textAlign: 'center',
-                padding: 'var(--spacing-4)',
-                color: 'var(--text-secondary)'
-              }}>
-                Aucun revenu enregistré pour ce mois
-              </div>
-            )}
-          </div>
         </div>
         <div style={cardStyle}>
           <h3>Ajouter une dépense</h3>
@@ -1376,111 +1370,7 @@ export default function Dashboard() {
               </button>
             </div>
           </form>
-
-          <div>
-            {/* Expense list */}
-            {filteredExpenses.length > 0 ? (
-              <>
-                {filteredExpenses.map((expense) => {
-                  // Find category name
-                  const categoryName = data.categories
-                    .find(cat => cat.id === expense.category_id)?.name || "Sans catégorie";
-
-                  // Check if this expense is pending deletion
-                  const isPendingDeletion = pendingDeletions.some(
-                    item => item.id === expense.id && item.type === 'expense'
-                  );
-
-                  return isPendingDeletion ? null : (
-                    <div key={expense.id} style={{
-                      display: 'grid',
-                      gridTemplateColumns: '1fr auto 8px 1fr 80px',
-                      gap: 'var(--spacing-2)',
-                      alignItems: 'center',
-                      padding: 'var(--spacing-1) 0',
-                      borderBottom: '1px solid var(--surface-border)'
-                    }}>
-                      {/* Label */}
-                      <div style={{
-                        overflow: 'hidden',
-                        textOverflow: 'ellipsis',
-                        whiteSpace: 'nowrap'
-                      }}>
-                        {expense.label}
-                      </div>
-
-                      {/* Category dot */}
-                      <div style={{
-                        width: 8,
-                        height: 8,
-                        background: categoryName ?
-                          (data.categories.find(cat => cat.name === categoryName)?.color || '#888') :
-                          '#888',
-                        borderRadius: '50%'
-                      }}></div>
-
-                      {/* Date */}
-                      <div style={{
-                        fontSize: 'var(--text-sm)',
-                        color: 'var(--text-secondary)'
-                      }}>
-                        {new Date(expense.date).toLocaleDateString('fr-FR', {
-                          day: '2-digit',
-                          month: '2-digit'
-                        })}
-                      </div>
-
-                      {/* Amount */}
-                      <div style={{
-                        fontVariantNumeric: 'tabular-nums',
-                        textAlign: 'right',
-                        fontWeight: 500
-                      }}>
-                        {formatEUR(expense.amount)}
-                      </div>
-
-                      {/* Delete button */}
-                      <button
-                        onClick={() => deleteWithUndo(expense.id, 'expense')}
-                        disabled={navigating}
-                        aria-label="Supprimer cette dépense"
-                        title="Supprimer cette dépense"
-                        style={{
-                          background: 'none',
-                          border: 'none',
-                          color: '#b91c1c',
-                          cursor: 'pointer',
-                          padding: 'var(--spacing-1)',
-                          fontSize: '1.2rem',
-                          lineHeight: 1,
-                          borderRadius: 'var(--radius-md)',
-                          width: 32,
-                          height: 32,
-                          display: 'flex',
-                          alignItems: 'center',
-                          justifyContent: 'center'
-                        }}
-                      >
-                        ×
-                      </button>
-                    </div>
-                  );
-                })}
-              </>
-            ) : (
-              <div style={{
-                textAlign: 'center',
-                padding: 'var(--spacing-4)',
-                color: 'var(--text-secondary)'
-              }}>
-                Aucune dépense enregistrée pour ce mois
-              </div>
-            )}
-          </div>
         </div>
-
-        {/* Dépense récurrente */}
-                {/* Dépense récurrente */}
         <div style={cardStyle}>
           <h3>Ajouter une charge fixe</h3>
           <form className="form-grid" onSubmit={handleRecurringSubmit} noValidate>
@@ -1555,106 +1445,7 @@ export default function Dashboard() {
               </button>
             </div>
           </form>
-
-          <div>
-            {/* Recurring expense list */}
-            {filteredRecurringExpenses.length > 0 ? (
-              <>
-                {filteredRecurringExpenses.map((recurring) => {
-                  // Find category name
-                  const categoryName = data.categories
-                    .find(cat => cat.id === recurring.category_id)?.name || "Sans catégorie";
-
-                  // Check if this recurring expense is pending deletion
-                  const isPendingDeletion = pendingDeletions.some(
-                    item => item.id === recurring.id && item.type === 'recurring'
-                  );
-
-                  return isPendingDeletion ? null : (
-                    <div key={recurring.id} style={{
-                      display: 'grid',
-                      gridTemplateColumns: '1fr auto 8px 1fr 80px',
-                      gap: 'var(--spacing-2)',
-                      alignItems: 'center',
-                      padding: 'var(--spacing-1) 0',
-                      borderBottom: '1px solid var(--surface-border)'
-                    }}>
-                      {/* Label */}
-                      <div style={{
-                        overflow: 'hidden',
-                        textOverflow: 'ellipsis',
-                        whiteSpace: 'nowrap'
-                      }}>
-                        {recurring.label}
-                      </div>
-
-                      {/* Category dot */}
-                      <div style={{
-                        width: 8,
-                        height: 8,
-                        background: categoryName ?
-                          (data.categories.find(cat => cat.name === categoryName)?.color || '#888') :
-                          '#888',
-                        borderRadius: '50%'
-                      }}></div>
-
-                      {/* Date (using day of month for recurring) */}
-                      <div style={{
-                        fontSize: 'var(--text-sm)',
-                        color: 'var(--text-secondary)'
-                      }}>
-                        Jour {recurring.day_of_month}
-                      </div>
-
-                      {/* Amount */}
-                      <div style={{
-                        fontVariantNumeric: 'tabular-nums',
-                        textAlign: 'right',
-                        fontWeight: 500
-                      }}>
-                        {formatEUR(recurring.amount)}
-                      </div>
-
-                      {/* Delete button */}
-                      <button
-                        onClick={() => deleteWithUndo(recurring.id, 'recurring')}
-                        disabled={navigating}
-                        aria-label="Supprimer cette charge fixe"
-                        title="Supprimer cette charge fixe"
-                        style={{
-                          background: 'none',
-                          border: 'none',
-                          color: '#b91c1c',
-                          cursor: 'pointer',
-                          padding: 'var(--spacing-1)',
-                          fontSize: '1.2rem',
-                          lineHeight: 1,
-                          borderRadius: 'var(--radius-md)',
-                          width: 32,
-                          height: 32,
-                          display: 'flex',
-                          alignItems: 'center',
-                          justifyContent: 'center'
-                        }}
-                      >
-                        ×
-                      </button>
-                    </div>
-                  );
-                })}
-              </>
-            ) : (
-              <div style={{
-                textAlign: 'center',
-                padding: 'var(--spacing-4)',
-                color: 'var(--text-secondary)'
-              }}>
-                Aucune charge fixe enregistrée pour ce mois
-              </div>
-            )}
-          </div>
         </div>
-
         {/* Objectif d'épargne */}
         <div style={cardStyle}>
           <h3>Nouvel objectif d'épargne</h3>
