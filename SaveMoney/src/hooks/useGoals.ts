@@ -2,6 +2,16 @@ import { useEffect, useState, useCallback } from "react";
 import { getDb, initSchema } from "../db/client";
 import type { Goal, Category } from "../types/budget";
 
+interface GoalRow {
+  id: number;
+  label: string;
+  target_amount: number;
+  current_amount: number;
+  target_date: string | null;
+  category_id: number | null;
+  created_at: string;
+}
+
 export interface GoalsData {
   goals: Goal[];
   categories: Category[];
@@ -21,7 +31,7 @@ export function useGoals() {
       await initSchema();
 
       const [goalsResult, categoriesResult] = await Promise.all([
-        db.select<Goal[]>(
+        db.select<GoalRow[]>(
           "SELECT g.*, c.name as category_name FROM goals g LEFT JOIN categories c ON g.category_id = c.id ORDER BY g.created_at DESC"
         ),
         db.select<Category[]>("SELECT * FROM categories ORDER BY name"),
@@ -33,8 +43,8 @@ export function useGoals() {
         label: goal.label,
         targetAmount: goal.target_amount,
         currentAmount: goal.current_amount,
-        targetDate: goal.target_date,
-        categoryId: goal.category_id,
+        targetDate: goal.target_date ?? undefined,
+        categoryId: goal.category_id ?? undefined,
         createdAt: goal.created_at,
       }));
 
@@ -71,7 +81,7 @@ export function useGoals() {
         [goal.label, goal.targetAmount, goal.currentAmount, goal.targetDate || null, goal.categoryId || null]
       );
 
-      const goalId = result.lastInsertRowId;
+      const goalId = result.lastInsertId;
       await load(); // Reload data
       return goalId;
     } catch (err) {

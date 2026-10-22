@@ -13,7 +13,6 @@ import { useMonthlyBudget } from "../hooks/useMonthlyBudget";
 import { useGoals } from "../hooks/useGoals";
 import { useDebts } from "../hooks/useDebts";
 import { formatEUR } from "../utils/formatEUR";
-import type { Goal, Debt } from "../types/budget";
 
 ChartJS.register(BarElement, CategoryScale, LinearScale, Tooltip, Legend);
 
@@ -73,7 +72,13 @@ export default function Dashboard() {
   const [debtMinimumPaymentError, setDebtMinimumPaymentError] = useState("");
   const [debtDueDateError, setDebtDueDateError] = useState("");
 
-  if ((loading || goalsLoading || debtsLoading) || (!data && !goalsData && !debtsData)) {
+  // Pending deletions for undo feature
+  const [pendingDeletions, setPendingDeletions] = useState<Array<{id: number, type: 'income' | 'expense' | 'recurring', timestamp: number}>>([]);
+
+  // Active category filter (from chart click)
+  const [activeFilterCategory, setActiveFilterCategory] = useState<string | null>(null);
+
+  if (loading || goalsLoading || debtsLoading || !data || !goalsData || !debtsData) {
     return <div style={{ padding: "2rem", color: "white" }}>Chargement...</div>;
   }
 
@@ -83,6 +88,28 @@ export default function Dashboard() {
 
   const incomeCategories = data.categories.filter((c) => c.type === "income");
   const expenseCategories = data.categories.filter((c) => c.type === "expense");
+
+  // Filter data based on active category filter
+  const filteredIncomes = activeFilterCategory
+    ? data.incomes.filter(income => {
+        const category = data.categories.find(cat => cat.id === income.category_id);
+        return category && category.name === activeFilterCategory;
+      })
+    : data.incomes;
+
+  const filteredExpenses = activeFilterCategory
+    ? data.expenses.filter(expense => {
+        const category = data.categories.find(cat => cat.id === expense.category_id);
+        return category && category.name === activeFilterCategory;
+      })
+    : data.expenses;
+
+  const filteredRecurringExpenses = activeFilterCategory
+    ? data.recurringExpenses.filter(recurring => {
+        const category = data.categories.find(cat => cat.id === recurring.category_id);
+        return category && category.name === activeFilterCategory;
+      })
+    : data.recurringExpenses;
 
   async function addIncome() {
     // Reset errors
@@ -244,7 +271,7 @@ export default function Dashboard() {
       setGoalLabelError("Le nom de l'objectif est requis");
       isValid = false;
     }
-    const targetAmountValue = parseFloat(goalTargetAmount);
+    const targetAmountValue = goalTargetAmount;
     if (!goalTargetAmount || isNaN(targetAmountValue) || targetAmountValue <= 0) {
       setGoalTargetAmountError("Veuillez entrer un montant cible valide supérieur à 0");
       isValid = false;
@@ -284,49 +311,104 @@ export default function Dashboard() {
     }
   }
 
-  async function addNewDebt() {
-    try {
-      await addDebt({
-        label: debtLabel,
-        amountOwed: debtAmount,
-        interestRate: debtInterest,
-        minimumPayment: debtMinimumPayment,
-        dueDate: debtDueDate,
-        categoryId: debtCategoryId
-      });
+  // Delete with undo functionality
+  async function deleteWithUndo(id: number, type: 'income' | 'expense' | 'recurring') {
+    // Generate a unique timestamp for this deletion
+    const timestamp = Date.now();
 
-      // Reset form
-      setDebtLabel("");
-      setDebtAmount(0);
-      setDebtInterest(undefined);
-      setDebtMinimumPayment(undefined);
-      setDebtDueDate("");
-      setDebtCategoryId(undefined);
+    // Add to pending deletions
+    setPendingDeletions(prev => [...prev, { id, type, timestamp }]);
 
-      // Refresh debts data
-      await refreshDebts();
-    } catch (err) {
-      console.error("Failed to add debt", err);
-      alert("Erreur lors de la création de la dette: " + err);
-    }
+    // Show undo toast
+    showToastWithUndo(`Opération supprimée`, () => undoDeletion(id, type, timestamp));
+
+    // Actually delete after delay (5 seconds)
+    setTimeout(async () => {
+      // Check if this deletion is still pending (not undone)
+      const stillPending = pendingDeletions.some(item =>
+        item.id === id && item.type === type && item.timestamp === timestamp
+      );
+
+      if (stillPending) {
+        // Remove from pending deletions
+        setPendingDeletions(prev => prev.filter(item =>
+          !(item.id === id && item.type === type && item.timestamp === timestamp)
+        ));
+
+        // Perform actual deletion
+        const db = await getDb();
+        if (type === 'income') {
+          await db.execute("DELETE FROM incomes WHERE id = ?", [id]);
+        } else if (type === 'expense') {
+          await db.execute("DELETE FROM expenses WHERE id = ?", [id]);
+        } else if (type === 'recurring') {
+          await db.execute("DELETE FROM recurring_expenses WHERE id = ?", [id]);
+        }
+
+        refresh();
+      }
+    }, 5000); // 5 seconds
   }
 
-  async function deleteIncome(id: number) {
-    const db = await getDb();
-    await db.execute("DELETE FROM incomes WHERE id = ?", [id]);
-    refresh();
+  // Undo a deletion
+  function undoDeletion(id: number, type: 'income' | 'expense' | 'recurring', timestamp: number) {
+    // Remove from pending deletions
+    setPendingDeletions(prev => prev.filter(item =>
+      !(item.id === id && item.type === type && item.timestamp === timestamp)
+    ));
+
+    showToast("Suppression annulée");
   }
 
-  async function deleteExpense(id: number) {
-    const db = await getDb();
-    await db.execute("DELETE FROM expenses WHERE id = ?", [id]);
-    refresh();
-  }
+  // Show toast with undo option
+  function showToastWithUndo(message: string, undoAction: () => void) {
+    // Simple toast implementation with undo button
+    const toast = document.createElement('div');
+    toast.innerHTML = `
+      <div style="display: flex; align-items: center; gap: 8px;">
+        <span>${message}</span>
+        <button onclick="this.closest('.toast').remove(); (${undoAction.toString()})();"
+                style="background: none; border: none; color: var(--color-income); cursor: pointer; padding: 0;">
+          Annuler
+        </button>
+      </div>
+    `;
+    toast.style.cssText = `
+      position: fixed;
+      bottom: 20px;
+      right: 20px;
+      background: var(--color-income);
+      color: white;
+      padding: var(--spacing-2) var(--spacing-3);
+      border-radius: var(--radius-md);
+      box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+      z-index: 1000;
+      opacity: 0;
+      transform: translateY(10px);
+      transition: opacity 0.3s ease, transform 0.3s ease;
+      font-family: inherit;
+    `;
 
-  async function deleteRecurring(id: number) {
-    const db = await getDb();
-    await db.execute("DELETE FROM recurring_expenses WHERE id = ?", [id]);
-    refresh();
+    // Add the toast to the body
+    document.body.appendChild(toast);
+
+    // Trigger reflow to enable transition
+    void toast.offsetWidth;
+
+    // Show toast
+    toast.style.opacity = '1';
+    toast.style.transform = 'translateY(0)';
+
+    // Hide toast after 5 seconds
+    setTimeout(() => {
+      toast.style.opacity = '0';
+      toast.style.transform = 'translateY(10px)';
+      setTimeout(() => {
+        if (toast.parentNode) {
+          toast.parentNode.removeChild(toast);
+        }
+      }, 300);
+    }, 5000);
   }
 
   // Helper function to identify savings categories (same as in hook)
@@ -345,21 +427,6 @@ export default function Dashboard() {
   // Helper function to format goal progress
   const formatGoalProgress = (current: number, target: number): string => {
     return `${formatEUR(current)} / ${formatEUR(target)}`;
-  };
-
-  // Helper function to format debt payoff progress
-  const formatDebtProgress = (paid: number, owed: number): string => {
-    return `${formatEUR(paid)} / ${formatEUR(owed)}`;
-  };
-
-  // Helper function to calculate debt payoff percentage
-  const calculateDebtPayoffPercentage = (amountOwed: number, originalAmount: number): number => {
-    // This would typically track how much has been paid off vs original amount
-    // For simplicity, we'll just show what percentage of the original debt remains
-    // In a real app, you'd track payment history
-    if (originalAmount <= 0) return 0;
-    const paidOff = Math.max(0, originalAmount - amountOwed);
-    return (paidOff / originalAmount) * 100;
   };
 
   // Helper function to format variation with + or - sign
@@ -883,7 +950,66 @@ export default function Dashboard() {
       {/* Graphique */}
       <section style={{ maxWidth: 700, marginBottom: 'var(--spacing-5)' }}>
         <h2>Dépenses par catégorie</h2>
-        <Bar data={chartData} />
+        <Bar
+          data={chartData}
+          options={{
+            onClick: (_event, elements, chart) => {
+              if (elements.length > 0) {
+                const activePoint = elements[0];
+                const label = chart.data.labels?.[activePoint.index];
+                if (typeof label !== "string") return;
+
+                // Set the active filter to the clicked category
+                setActiveFilterCategory(label);
+
+                // Optional: Show visual feedback that filter is active
+                showToast(`Filtre appliqué : ${label}`);
+              }
+            }
+          }}
+        />
+        {/* Show active filter if any */}
+        {activeFilterCategory && (
+          <div style={{
+            display: 'flex',
+            alignItems: 'center',
+            gap: 'var(--spacing-1)',
+            background: 'var(--surface-card)',
+            padding: 'var(--spacing-2)',
+            borderRadius: 'var(--radius-md)',
+            marginBottom: 'var(--spacing-3)',
+            fontSize: 'var(--text-sm)'
+          }}>
+            <span>Filtre actif : </span>
+            <span style={{
+              background: 'var(--color-income)',
+              color: 'white',
+              padding: 'var(--spacing-1) var(--spacing-2)',
+              borderRadius: 'var(--radius-sm)',
+              fontWeight: 500
+            }}>
+              {activeFilterCategory}
+            </span>
+            <button
+              onClick={() => {
+                setActiveFilterCategory(null);
+                showToast("Filtre supprimé");
+              }}
+              aria-label="Supprimer le filtre"
+              title="Supprimer le filtre"
+              style={{
+                background: 'none',
+                border: 'none',
+                color: 'var(--text-secondary)',
+                cursor: 'pointer',
+                padding: 'var(--spacing-1)',
+                fontSize: 'var(--text-xs)'
+              }}
+            >
+              ×
+            </button>
+          </div>
+        )}
       </section>
 
       {/* Formulaires */}
@@ -936,19 +1062,106 @@ export default function Dashboard() {
             </div>
           </div>
 
-          <ul>
-            {data.incomes.map((i) => (
-              <li key={i.id} style={{ marginBottom: 'var(--spacing-2)' }}>
-                {i.label} — {formatEUR(i.amount)} {" "}
-                <button style={{ ...btnStyle, background: "#b91c1c" }} onClick={() => deleteIncome(i.id)}>
-                  ×
-                </button>
-              </li>
-            ))}
-          </ul>
-        </div>
+          <div>
+            {/* Income list */}
+            {filteredIncomes.length > 0 ? (
+              <>
+                {filteredIncomes.map((income) => {
+                  // Find category name
+                  const categoryName = data.categories
+                    .find(cat => cat.id === income.category_id)?.name || "Sans catégorie";
 
-        {/* Dépense ponctuelle */}
+                  // Check if this income is pending deletion
+                  const isPendingDeletion = pendingDeletions.some(
+                    item => item.id === income.id && item.type === 'income'
+                  );
+
+                  return isPendingDeletion ? null : (
+                      <div key={income.id} style={{
+                      display: 'grid',
+                      gridTemplateColumns: '1fr auto 8px 1fr 80px',
+                      gap: 'var(--spacing-2)',
+                      alignItems: 'center',
+                      padding: 'var(--spacing-1) 0',
+                      borderBottom: '1px solid var(--surface-border)'
+                    }}>
+                      {/* Label */}
+                      <div style={{
+                        overflow: 'hidden',
+                        textOverflow: 'ellipsis',
+                        whiteSpace: 'nowrap'
+                      }}>
+                        {income.label}
+                      </div>
+
+                      {/* Category dot */}
+                      <div style={{
+                        width: 8,
+                        height: 8,
+                        background: categoryName ?
+                          (data.categories.find(cat => cat.name === categoryName)?.color || '#888') :
+                          '#888',
+                        borderRadius: '50%'
+                      }}></div>
+
+                      {/* Date */}
+                      <div style={{
+                        fontSize: 'var(--text-sm)',
+                        color: 'var(--text-secondary)'
+                      }}>
+                        {new Date(income.date).toLocaleDateString('fr-FR', {
+                          day: '2-digit',
+                          month: '2-digit'
+                        })}
+                      </div>
+
+                      {/* Amount */}
+                      <div style={{
+                        fontVariantNumeric: 'tabular-nums',
+                        textAlign: 'right',
+                        fontWeight: 500
+                      }}>
+                        {formatEUR(income.amount)}
+                      </div>
+
+                      {/* Delete button */}
+                      <button
+                        onClick={() => deleteWithUndo(income.id, 'income')}
+                        aria-label="Supprimer ce revenu"
+                        title="Supprimer ce revenu"
+                        style={{
+                          background: 'none',
+                          border: 'none',
+                          color: '#b91c1c',
+                          cursor: 'pointer',
+                          padding: 'var(--spacing-1)',
+                          fontSize: '1.2rem',
+                          lineHeight: 1,
+                          borderRadius: 'var(--radius-md)',
+                          width: 32,
+                          height: 32,
+                          display: 'flex',
+                          alignItems: 'center',
+                          justifyContent: 'center'
+                        }}
+                      >
+                        ×
+                      </button>
+                    </div>
+                  );
+                })}
+              </>
+            ) : (
+              <div style={{
+                textAlign: 'center',
+                padding: 'var(--spacing-4)',
+                color: 'var(--text-secondary)'
+              }}>
+                Aucun revenu enregistré pour ce mois
+              </div>
+            )}
+          </div>
+        </div>
         <div style={cardStyle}>
           <h3>Ajouter une dépense</h3>
           <div style={{ display: "grid", gap: 'var(--spacing-2)', gridTemplateColumns: "repeat(auto-fill, minmax(200px, 1fr))" }}>
@@ -1007,16 +1220,105 @@ export default function Dashboard() {
             </div>
           </div>
 
-          <ul>
-            {data.expenses.map((e) => (
-              <li key={e.id} style={{ marginBottom: 'var(--spacing-2)' }}>
-                {e.label} — {formatEUR(e.amount)} {" "}
-                <button style={{ ...btnStyle, background: "#b91c1c" }} onClick={() => deleteExpense(e.id)}>
-                  ×
-                </button>
-              </li>
-            ))}
-          </ul>
+          <div>
+            {/* Expense list */}
+            {filteredExpenses.length > 0 ? (
+              <>
+                {filteredExpenses.map((expense) => {
+                  // Find category name
+                  const categoryName = data.categories
+                    .find(cat => cat.id === expense.category_id)?.name || "Sans catégorie";
+
+                  // Check if this expense is pending deletion
+                  const isPendingDeletion = pendingDeletions.some(
+                    item => item.id === expense.id && item.type === 'expense'
+                  );
+
+                  return isPendingDeletion ? null : (
+                    <div key={expense.id} style={{
+                      display: 'grid',
+                      gridTemplateColumns: '1fr auto 8px 1fr 80px',
+                      gap: 'var(--spacing-2)',
+                      alignItems: 'center',
+                      padding: 'var(--spacing-1) 0',
+                      borderBottom: '1px solid var(--surface-border)'
+                    }}>
+                      {/* Label */}
+                      <div style={{
+                        overflow: 'hidden',
+                        textOverflow: 'ellipsis',
+                        whiteSpace: 'nowrap'
+                      }}>
+                        {expense.label}
+                      </div>
+
+                      {/* Category dot */}
+                      <div style={{
+                        width: 8,
+                        height: 8,
+                        background: categoryName ?
+                          (data.categories.find(cat => cat.name === categoryName)?.color || '#888') :
+                          '#888',
+                        borderRadius: '50%'
+                      }}></div>
+
+                      {/* Date */}
+                      <div style={{
+                        fontSize: 'var(--text-sm)',
+                        color: 'var(--text-secondary)'
+                      }}>
+                        {new Date(expense.date).toLocaleDateString('fr-FR', {
+                          day: '2-digit',
+                          month: '2-digit'
+                        })}
+                      </div>
+
+                      {/* Amount */}
+                      <div style={{
+                        fontVariantNumeric: 'tabular-nums',
+                        textAlign: 'right',
+                        fontWeight: 500
+                      }}>
+                        {formatEUR(expense.amount)}
+                      </div>
+
+                      {/* Delete button */}
+                      <button
+                        onClick={() => deleteWithUndo(expense.id, 'expense')}
+                        aria-label="Supprimer cette dépense"
+                        title="Supprimer cette dépense"
+                        style={{
+                          background: 'none',
+                          border: 'none',
+                          color: '#b91c1c',
+                          cursor: 'pointer',
+                          padding: 'var(--spacing-1)',
+                          fontSize: '1.2rem',
+                          lineHeight: 1,
+                          borderRadius: 'var(--radius-md)',
+                          width: 32,
+                          height: 32,
+                          display: 'flex',
+                          alignItems: 'center',
+                          justifyContent: 'center'
+                        }}
+                      >
+                        ×
+                      </button>
+                    </div>
+                  );
+                })}
+              </>
+            ) : (
+              <div style={{
+                textAlign: 'center',
+                padding: 'var(--spacing-4)',
+                color: 'var(--text-secondary)'
+              }}>
+                Aucune dépense enregistrée pour ce mois
+              </div>
+            )}
+          </div>
         </div>
 
         {/* Dépense récurrente */}
@@ -1082,19 +1384,102 @@ export default function Dashboard() {
             </div>
           </div>
 
-          <ul>
-            {data.recurringExpenses.map((r) => (
-              <li key={r.id} style={{ marginBottom: 'var(--spacing-2)' }}>
-                {r.label} — {formatEUR(r.amount)} € (jour {r.day_of_month}){" "}
-                <button
-                  style={{ ...btnStyle, background: "#b91c1c" }}
-                  onClick={() => deleteRecurring(r.id)}
-                >
-                  ×
-                </button>
-              </li>
-            ))}
-          </ul>
+          <div>
+            {/* Recurring expense list */}
+            {filteredRecurringExpenses.length > 0 ? (
+              <>
+                {filteredRecurringExpenses.map((recurring) => {
+                  // Find category name
+                  const categoryName = data.categories
+                    .find(cat => cat.id === recurring.category_id)?.name || "Sans catégorie";
+
+                  // Check if this recurring expense is pending deletion
+                  const isPendingDeletion = pendingDeletions.some(
+                    item => item.id === recurring.id && item.type === 'recurring'
+                  );
+
+                  return isPendingDeletion ? null : (
+                    <div key={recurring.id} style={{
+                      display: 'grid',
+                      gridTemplateColumns: '1fr auto 8px 1fr 80px',
+                      gap: 'var(--spacing-2)',
+                      alignItems: 'center',
+                      padding: 'var(--spacing-1) 0',
+                      borderBottom: '1px solid var(--surface-border)'
+                    }}>
+                      {/* Label */}
+                      <div style={{
+                        overflow: 'hidden',
+                        textOverflow: 'ellipsis',
+                        whiteSpace: 'nowrap'
+                      }}>
+                        {recurring.label}
+                      </div>
+
+                      {/* Category dot */}
+                      <div style={{
+                        width: 8,
+                        height: 8,
+                        background: categoryName ?
+                          (data.categories.find(cat => cat.name === categoryName)?.color || '#888') :
+                          '#888',
+                        borderRadius: '50%'
+                      }}></div>
+
+                      {/* Date (using day of month for recurring) */}
+                      <div style={{
+                        fontSize: 'var(--text-sm)',
+                        color: 'var(--text-secondary)'
+                      }}>
+                        Jour {recurring.day_of_month}
+                      </div>
+
+                      {/* Amount */}
+                      <div style={{
+                        fontVariantNumeric: 'tabular-nums',
+                        textAlign: 'right',
+                        fontWeight: 500
+                      }}>
+                        {formatEUR(recurring.amount)}
+                      </div>
+
+                      {/* Delete button */}
+                      <button
+                        onClick={() => deleteWithUndo(recurring.id, 'recurring')}
+                        aria-label="Supprimer cette charge fixe"
+                        title="Supprimer cette charge fixe"
+                        style={{
+                          background: 'none',
+                          border: 'none',
+                          color: '#b91c1c',
+                          cursor: 'pointer',
+                          padding: 'var(--spacing-1)',
+                          fontSize: '1.2rem',
+                          lineHeight: 1,
+                          borderRadius: 'var(--radius-md)',
+                          width: 32,
+                          height: 32,
+                          display: 'flex',
+                          alignItems: 'center',
+                          justifyContent: 'center'
+                        }}
+                      >
+                        ×
+                      </button>
+                    </div>
+                  );
+                })}
+              </>
+            ) : (
+              <div style={{
+                textAlign: 'center',
+                padding: 'var(--spacing-4)',
+                color: 'var(--text-secondary)'
+              }}>
+                Aucune charge fixe enregistrée pour ce mois
+              </div>
+            )}
+          </div>
         </div>
 
         {/* Objectif d'épargne */}

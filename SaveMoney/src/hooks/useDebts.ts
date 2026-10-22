@@ -2,6 +2,17 @@ import { useEffect, useState, useCallback } from "react";
 import { getDb, initSchema } from "../db/client";
 import type { Debt, Category } from "../types/budget";
 
+interface DebtRow {
+  id: number;
+  label: string;
+  amount_owed: number;
+  interest_rate: number | null;
+  minimum_payment: number | null;
+  due_date: string | null;
+  category_id: number | null;
+  created_at: string;
+}
+
 export interface DebtsData {
   debts: Debt[];
   categories: Category[];
@@ -21,7 +32,7 @@ export function useDebts() {
       await initSchema();
 
       const [debtsResult, categoriesResult] = await Promise.all([
-        db.select<Debt[]>(
+        db.select<DebtRow[]>(
           "SELECT d.*, c.name as category_name FROM debts d LEFT JOIN categories c ON d.category_id = c.id ORDER BY d.created_at DESC"
         ),
         db.select<Category[]>("SELECT * FROM categories ORDER BY name"),
@@ -32,10 +43,10 @@ export function useDebts() {
         id: debt.id,
         label: debt.label,
         amountOwed: debt.amount_owed,
-        interestRate: debt.interest_rate,
-        minimumPayment: debt.minimum_payment,
-        dueDate: debt.due_date,
-        categoryId: debt.category_id,
+        interestRate: debt.interest_rate ?? undefined,
+        minimumPayment: debt.minimum_payment ?? undefined,
+        dueDate: debt.due_date ?? undefined,
+        categoryId: debt.category_id ?? undefined,
         createdAt: debt.created_at,
       }));
 
@@ -79,7 +90,7 @@ export function useDebts() {
         ]
       );
 
-      const debtId = result.lastInsertRowId;
+      const debtId = result.lastInsertId;
       await load(); // Reload data
       return debtId;
     } catch (err) {
