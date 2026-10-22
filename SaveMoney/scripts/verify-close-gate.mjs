@@ -16,7 +16,21 @@ const { outputText } = ts.transpileModule(source, {
   compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2020 },
 });
 const moduleObject = { exports: {} };
-new Function("module", "exports", outputText)(moduleObject, moduleObject.exports);
+// Résout les imports relatifs (closeGate importe inlineEdit) avec le même transpileur.
+function loadUtil(name) {
+  const utilSource = readFileSync(path.join(root, "src", "utils", `${name}.ts`), "utf8");
+  const { outputText: utilOutput } = ts.transpileModule(utilSource, {
+    compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2020 },
+  });
+  const utilModule = { exports: {} };
+  new Function("module", "exports", "require", utilOutput)(utilModule, utilModule.exports, (spec) =>
+    loadUtil(spec.startsWith("./") ? spec.slice(2) : spec)
+  );
+  return utilModule.exports;
+}
+new Function("module", "exports", "require", outputText)(moduleObject, moduleObject.exports, (spec) =>
+  loadUtil(spec.startsWith("./") ? spec.slice(2) : spec)
+);
 const { createCloseGate, CLOSE_BLOCKED_MESSAGE, CLOSE_FAILED_MESSAGE } = moduleObject.exports;
 
 // Harnais : `flushResult` et `closeError` pilotent les réponses ; `calls` trace les appels.

@@ -17,9 +17,42 @@ import { useMonthlyBudget } from "../hooks/useMonthlyBudget";
 import { useGoals } from "../hooks/useGoals";
 import { useDebts } from "../hooks/useDebts";
 import { formatEUR } from "../utils/formatEUR";
-import { isValidCalendarDate, monthOfDate, parseAmount, parseDayOfMonth } from "../utils/formValidation";
+import {
+  AMOUNT_INVALID,
+  DAY_INVALID,
+  LABEL_REQUIRED,
+  isValidCalendarDate,
+  monthOfDate,
+  parseAmount,
+  parseDayOfMonth,
+} from "../utils/formValidation";
 import { DeferredDeletionQueue, type DeletableType, type PendingDeletion } from "../utils/deferredDeletions";
-import { createCloseGate } from "../utils/closeGate";
+import { createCloseGate, createEditAwareClose } from "../utils/closeGate";
+import {
+  EDIT_DISCARD_MESSAGE,
+  EDIT_SAVE_ERROR,
+  baselineFromRow,
+  draftFromBaseline,
+  editButtonId,
+  editKey,
+  editSuccessMessage,
+  isDraftChanged,
+  movesToSavings,
+  outsideFilter,
+  requestEditTransition,
+  createSaveGuard,
+  runGuarded,
+  submitEdit,
+  validateDraft,
+  type EditBaseline,
+  type EditDraft,
+  type EditErrors,
+  type EditKind,
+  type EditRowSource,
+  type TransitionDecision,
+} from "../utils/inlineEdit";
+import { categoryDotColor } from "../utils/categoryColor";
+import { OperationEditForm, type CategoryOption } from "../components/OperationEditForm";
 import { isTauri } from "@tauri-apps/api/core";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 
@@ -55,16 +88,39 @@ function currentMonth(): string {
 
 type FormKind = "income" | "expense" | "recurring";
 
-const LABEL_REQUIRED = "Le libellé est requis";
-const AMOUNT_INVALID = "Saisissez un montant supérieur à 0";
 const DATE_REQUIRED = "Choisissez une date valide";
-const DAY_INVALID = "Saisissez un jour entier entre 1 et 31";
 const SAVE_ERROR_MESSAGE = "L'enregistrement a échoué. Vos saisies sont conservées.";
 const DELETE_FAILED_MESSAGE = "La suppression a échoué. La ligne est restée enregistrée.";
 const MONTH_PATTERN = /^\d{4}-\d{2}$/;
 const MONTH_CHANGE_FAILED_MESSAGE =
   "Changement de mois annulé : une suppression n'a pas pu être finalisée. Vous restez sur ce mois.";
 const UNDO_FINALIZING_MESSAGE = "Finalisation de la suppression…";
+const EDIT_SAVING_CLOSE_MESSAGE = "Enregistrement en cours : la fermeture est annulée. Réessayez dans un instant.";
+const OPERATIONS_HEADING_ID = "ops-operations-heading";
+const CHARGES_HEADING_ID = "ops-recurring-heading";
+const MONTH_CHANGE_BLOCKED_REASON = "le changement de mois est bloqué pour le moment";
+
+// The row being edited. Only one at a time; the draft is kept until it is saved or dropped.
+interface EditingRow {
+  kind: EditKind;
+  id: number;
+  key: string;
+  baseline: EditBaseline;
+  draft: EditDraft;
+  errors: EditErrors;
+  saveError: string | null;
+}
+
+// Small colored dot; a neutral ring when the entry has no category
+function CategoryDot({ color }: { color: string | null }) {
+  return (
+    <span
+      className={color === null ? "cat-dot cat-dot-none" : "cat-dot"}
+      style={color === null ? undefined : { background: color }}
+      aria-hidden="true"
+    />
+  );
+}
 
 const DELETE_SQL: Record<DeletableType, string> = {
   income: "DELETE FROM incomes WHERE id = ?",
@@ -174,6 +230,19 @@ export default function Dashboard() {
   // Active filter from a chart click: null (no filter), a category, or entries without a category
   const [activeFilter, setActiveFilter] = useState<CategoryFilter | null>(null);
 
+  // Inline edit: one row at a time. The ref blocks a second save before React re-renders.
+  const [editing, setEditing] = useState<EditingRow | null>(null);
+  const [editSaving, setEditSaving] = useState(false);
+  const [editGuard] = useState(createSaveGuard);
+  // Read by the close listener, which is mounted once: updated after each render
+  const editDirty = editing !== null && isDraftChanged(editing.kind, editing.baseline, editing.draft);
+  const editGuardRef = useRef({ dirty: false });
+  useEffect(() => {
+    editGuardRef.current = { dirty: editDirty };
+  });
+  // Focus target after a save or a cancel: the row's edit button, or the list heading if the row is gone
+  const pendingEditFocusRef = useRef<string | null>(null);
+
   // Chart rows: expense categories without savings, largest amount first, empty ones hidden
   const chartRows = useMemo(() => (data ? buildChartRows(data) : []), [data]);
 
@@ -217,6 +286,29 @@ export default function Dashboard() {
     input?.focus();
     pendingFocusRef.current = null;
   }, [loading, data]);
+
+  // Focus after a save or a cancel. It waits for the reloaded list, so the target exists.
+  useEffect(() => {
+    const key = pendingEditFocusRef.current;
+    if (key === null || loading || !data) return;
+    const fallbackId = key.startsWith("recurring-") ? CHARGES_HEADING_ID : OPERATIONS_HEADING_ID;
+    const target = document.getElementById(editButtonId(key)) ?? document.getElementById(fallbackId);
+    target?.focus();
+    pendingEditFocusRef.current = null;
+  }, [editing, loading, data]);
+
+  // The edited row can only disappear through a reload. Its draft is then dropped with a message, not kept silently.
+  useEffect(() => {
+    if (!editing || loading || !data) return;
+    const rows =
+      editing.kind === "income" ? data.incomes
+      : editing.kind === "expense" ? data.expenses
+      : data.recurringExpenses;
+    if (!rows.some((row) => row.id === editing.id)) {
+      setEditing(null);
+      showToast("L'opération n'est plus disponible. La modification est annulée.", "error");
+    }
+  }, [editing, loading, data]);
 
   const dismissToast = (id: number) => {
     const timer = toastTimersRef.current.get(id);
@@ -281,8 +373,18 @@ export default function Dashboard() {
       close: () => getCurrentWindow().close(),
       onBlocked: (message) => showToast(message, "error"),
     });
+    // The unsaved edit is checked first; only an accepted close reaches the gate, which alone may finalize deletions.
+    // Read through refs and guard objects: this listener is mounted once.
+    const handleCloseRequest = createEditAwareClose({
+      isSaving: () => editGuard.isSaving(),
+      isDirty: () => editGuardRef.current.dirty,
+      confirmDiscard: () => window.confirm(EDIT_DISCARD_MESSAGE),
+      onSaving: () => showToast(EDIT_SAVING_CLOSE_MESSAGE, "error"),
+      discardEdit: () => setEditing(null),
+      gate,
+    });
     getCurrentWindow()
-      .onCloseRequested(gate)
+      .onCloseRequested(handleCloseRequest)
       .then((stop) => {
         if (disposed) stop();
         else unlisten = stop;
@@ -314,6 +416,15 @@ export default function Dashboard() {
 
   const incomeCategories = data.categories.filter((c) => c.type === "income");
   const expenseCategories = data.categories.filter((c) => c.type === "expense");
+
+  // Revenues only offer income categories, expenses and recurring expenses offer expense categories (Épargne included).
+  // The stored category stays selectable even if it is not of the usual type, so saving does not silently change it.
+  const categoryOptionsFor = (kind: EditKind, storedId: number | null): CategoryOption[] => {
+    const usual = kind === "income" ? incomeCategories : expenseCategories;
+    if (storedId === null || usual.some((cat) => cat.id === storedId)) return usual;
+    const stored = data.categories.find((cat) => cat.id === storedId);
+    return [...usual, { id: storedId, name: stored?.name ?? "Catégorie introuvable" }];
+  };
 
   // Filter data based on active category filter
   const filteredIncomes = filterByCategory(data.incomes, activeFilter, data.categories);
@@ -426,7 +537,7 @@ export default function Dashboard() {
     const reason =
       status === "failed"
         ? "une suppression en attente n'a pas pu être finalisée"
-        : "un autre changement de mois est en cours";
+        : MONTH_CHANGE_BLOCKED_REASON;
     showToast(
       `La dépense est enregistrée dans ${formatMonthLabel(targetMonth)}. Vous restez sur ${formatMonthLabel(month)} : ${reason}. Ne la soumettez pas à nouveau.`,
       "error"
@@ -541,7 +652,10 @@ export default function Dashboard() {
   // Single entry point for every month change (selector and expense saved in another month)
   async function requestMonthChange(target: string): Promise<"changed" | "unchanged" | "blocked" | "failed"> {
     if (target === month || !MONTH_PATTERN.test(target)) return "unchanged";
-    if (navigatingRef.current) return "blocked";
+    if (navigatingRef.current || editGuard.isSaving()) return "blocked";
+    // The edit check comes before any finalization: a refused change leaves the pending deletions alone
+    if (editTransition() === "blocked") return "blocked";
+    setEditing(null);
     navigatingRef.current = true;
     setNavigating(true);
     try {
@@ -564,7 +678,7 @@ export default function Dashboard() {
 
   // Delete with undo: the row is hidden at once, the DELETE runs after 5 seconds unless undone
   function deleteWithUndo(id: number, type: DeletableType) {
-    if (navigatingRef.current) return;
+    if (navigatingRef.current || editGuard.isSaving()) return;
     const key = deletionQueue.schedule(id, type);
     showToastWithUndo("Opération supprimée", () => undoDeletion(key));
   }
@@ -580,6 +694,94 @@ export default function Dashboard() {
   // Undo toast rendered by React; its action cancels the queued deletion
   function showToastWithUndo(message: string, undoAction: () => void) {
     showToast(message, "success", { label: "Annuler", run: undoAction }, 5000);
+  }
+
+  // Every transition that would drop an unsaved draft goes through here (a save in progress blocks it)
+  function editTransition(): TransitionDecision {
+    return requestEditTransition(
+      { dirty: editGuardRef.current.dirty, saving: editGuard.isSaving() },
+      () => window.confirm(EDIT_DISCARD_MESSAGE)
+    );
+  }
+
+  // Filter changes (chart click, chip, empty state) end the edit, as they may hide the edited row
+  function changeFilter(next: CategoryFilter | null, message?: string) {
+    if (editTransition() === "blocked") return;
+    setEditing(null);
+    setActiveFilter(next);
+    if (message) showToast(message);
+  }
+
+  function beginEdit(kind: EditKind, row: EditRowSource) {
+    const key = editKey(kind, row.id);
+    if (editing?.key === key) return;
+    if (navigatingRef.current || editGuard.isSaving()) return;
+    if (editTransition() === "blocked") return;
+    const baseline = baselineFromRow(kind, row);
+    setEditing({
+      kind,
+      id: row.id,
+      key,
+      baseline,
+      draft: draftFromBaseline(baseline),
+      errors: {},
+      saveError: null,
+    });
+  }
+
+  function cancelEdit() {
+    if (!editing) return;
+    if (editTransition() === "blocked") return;
+    pendingEditFocusRef.current = editing.key;
+    setEditing(null);
+  }
+
+  function changeEditDraft(field: keyof EditDraft, value: string) {
+    setEditing((prev) => (prev ? { ...prev, draft: { ...prev.draft, [field]: value } } : prev));
+  }
+
+  async function handleEditSubmit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!editing || !data || editGuard.isSaving()) return;
+    const { kind, id, key } = editing;
+    const checked = validateDraft(kind, editing.draft);
+    if ("errors" in checked) {
+      setEditing((prev) => (prev ? { ...prev, errors: checked.errors, saveError: null } : prev));
+      return;
+    }
+    const values = checked.values;
+
+    // runGuarded refuses a second run while this one is in progress; the first run alone changes the state
+    const outcome = await runGuarded(editGuard, async () => {
+      setEditSaving(true);
+      setEditing((prev) => (prev ? { ...prev, errors: {}, saveError: null } : prev));
+      return submitEdit(
+        kind,
+        id,
+        values,
+        async (sql, params) => {
+          const db = await getDb();
+          await db.execute(sql, params);
+        },
+        (error) => console.error(`Failed to update ${kind}`, error)
+      );
+    });
+    if (outcome === "skipped") return;
+    setEditSaving(false);
+
+    if (outcome === "failed") {
+      // Nothing was written: the draft stays as typed, and the error is shown on its row
+      setEditing((prev) => (prev ? { ...prev, saveError: EDIT_SAVE_ERROR } : prev));
+      return;
+    }
+
+    // The update is saved. The edit ends before the reload, so the same change is never submitted again.
+    const leavesFilter = outsideFilter(values.categoryId, activeFilter, data.categories);
+    const toSavings = movesToSavings(kind, values.categoryId, data.categories);
+    pendingEditFocusRef.current = key;
+    setEditing(null);
+    showToast(editSuccessMessage(leavesFilter, toSavings));
+    refresh();
   }
 
   // Helper function to calculate percentage safely
@@ -648,8 +850,7 @@ export default function Dashboard() {
       const row = chartRows[elements[0].index];
       if (!row) return;
       const isSame = isSameFilter(activeFilter, row.filter);
-      setActiveFilter(isSame ? null : row.filter);
-      showToast(isSame ? "Filtre supprimé" : `Filtre appliqué : ${row.label}`);
+      changeFilter(isSame ? null : row.filter, isSame ? "Filtre supprimé" : `Filtre appliqué : ${row.label}`);
     },
   };
 
@@ -865,10 +1066,7 @@ export default function Dashboard() {
               {activeFilterLabel}
             </span>
             <button
-              onClick={() => {
-                setActiveFilter(null);
-                showToast("Filtre supprimé");
-              }}
+              onClick={() => changeFilter(null, "Filtre supprimé")}
               aria-label="Supprimer le filtre"
               title="Supprimer le filtre"
               style={{
@@ -887,35 +1085,75 @@ export default function Dashboard() {
       </section>
         <div className="ops-pair">
           <section className="ops-card">
-            <h2>Opérations du mois</h2>
+            <h2 id={OPERATIONS_HEADING_ID} tabIndex={-1}>Opérations du mois</h2>
             {operations.length === 0 ? (
-              <p className="ops-empty">
-                {activeFilter === null
-                  ? "Aucune opération enregistrée pour ce mois."
-                  : "Aucune opération pour cette catégorie ce mois-ci."}
-              </p>
+              <div className="ops-empty-state">
+                <p className="ops-empty">
+                  {activeFilter === null
+                    ? "Aucune opération enregistrée pour ce mois."
+                    : "Aucune opération pour ce filtre ce mois-ci."}
+                </p>
+                {activeFilter !== null && (
+                  <button type="button" className="btn-ghost" onClick={() => changeFilter(null, "Filtre supprimé")}>
+                    Retirer le filtre
+                  </button>
+                )}
+              </div>
             ) : (
               <div className="ops-scroll" role="region" aria-label="Liste des revenus et dépenses" tabIndex={0}>
                 <ul className="ops-list">
                   {operations.map((op) => {
                     const categoryName = data.categories.find((cat) => cat.id === op.category_id)?.name ?? "Sans catégorie";
                     const kindLabel = op.kind === "income" ? "Revenu" : "Dépense";
+                    const editor = editing?.key === op.key ? editing : null;
                     return (
-                      <li key={op.key} className="ops-row">
-                        <span className={`ops-kind ops-kind-${op.kind}`}>{kindLabel}</span>
-                        <span className="ops-label">{op.label}</span>
-                        <span className="ops-meta">{categoryName} · {formatShortDate(op.date)}</span>
-                        <span className="ops-amount">{formatEUR(op.amount)}</span>
-                        <button
-                          type="button"
-                          className="ops-delete"
-                          onClick={() => deleteWithUndo(op.id, op.kind)}
-                          disabled={navigating}
-                          aria-label={`Supprimer ${kindLabel.toLowerCase()} : ${op.label}`}
-                          title="Supprimer"
-                        >
-                          ×
-                        </button>
+                      <li key={op.key} className={editor ? "ops-row ops-row-editing" : "ops-row"}>
+                        {editor ? (
+                          <OperationEditForm
+                            idPrefix={`edit-${op.key}`}
+                            kind={editor.kind}
+                            draft={editor.draft}
+                            errors={editor.errors}
+                            saveError={editor.saveError}
+                            saving={editSaving}
+                            categories={categoryOptionsFor(editor.kind, editor.baseline.categoryId)}
+                            onChange={changeEditDraft}
+                            onSubmit={handleEditSubmit}
+                            onCancel={cancelEdit}
+                          />
+                        ) : (
+                          <>
+                            <span className={`ops-kind ops-kind-${op.kind}`}>{kindLabel}</span>
+                            <span className="ops-label">{op.label}</span>
+                            <span className="ops-meta">
+                              <CategoryDot color={categoryDotColor(op.category_id, data.categories)} />
+                              {categoryName} · {formatShortDate(op.date)}
+                            </span>
+                            <span className="ops-amount">{formatEUR(op.amount)}</span>
+                            <span className="ops-actions">
+                              <button
+                                id={editButtonId(op.key)}
+                                type="button"
+                                className="ops-edit"
+                                onClick={() => beginEdit(op.kind, op)}
+                                disabled={navigating || editSaving}
+                                aria-label={`Modifier ${kindLabel.toLowerCase()} : ${op.label}`}
+                              >
+                                Modifier
+                              </button>
+                              <button
+                                type="button"
+                                className="ops-delete"
+                                onClick={() => deleteWithUndo(op.id, op.kind)}
+                                disabled={navigating || editSaving}
+                                aria-label={`Supprimer ${kindLabel.toLowerCase()} : ${op.label}`}
+                                title="Supprimer"
+                              >
+                                ×
+                              </button>
+                            </span>
+                          </>
+                        )}
                       </li>
                     );
                   })}
@@ -925,36 +1163,75 @@ export default function Dashboard() {
           </section>
 
           <section className="ops-card">
-            <h2>Charges fixes actives</h2>
+            <h2 id={CHARGES_HEADING_ID} tabIndex={-1}>Charges fixes actives</h2>
             {recurringRows.length === 0 ? (
-              <p className="ops-empty">
-                {activeFilter === null
-                  ? "Aucune charge fixe active."
-                  : "Aucune charge fixe active pour cette catégorie."}
-              </p>
+              <div className="ops-empty-state">
+                <p className="ops-empty">
+                  {activeFilter === null
+                    ? "Aucune charge fixe active."
+                    : "Aucune charge fixe active pour ce filtre."}
+                </p>
+                {activeFilter !== null && (
+                  <button type="button" className="btn-ghost" onClick={() => changeFilter(null, "Filtre supprimé")}>
+                    Retirer le filtre
+                  </button>
+                )}
+              </div>
             ) : (
               <div className="ops-scroll" role="region" aria-label="Liste des charges fixes actives" tabIndex={0}>
                 <ul className="ops-list">
                   {recurringRows.map((rec) => {
                     const categoryName = data.categories.find((cat) => cat.id === rec.category_id)?.name ?? "Sans catégorie";
+                    const key = editKey("recurring", rec.id);
+                    const editor = editing?.key === key ? editing : null;
                     return (
-                      <li key={`recurring-${rec.id}`} className="ops-row">
-                        <span className="ops-kind ops-kind-recurring">Charge fixe</span>
-                        <span className="ops-label">{rec.label}</span>
-                        <span className="ops-meta">
-                          {categoryName} · {rec.day_of_month !== null ? `le ${rec.day_of_month} du mois` : "jour non défini"}
-                        </span>
-                        <span className="ops-amount">{formatEUR(rec.amount)}</span>
-                        <button
-                          type="button"
-                          className="ops-delete"
-                          onClick={() => deleteWithUndo(rec.id, "recurring")}
-                          disabled={navigating}
-                          aria-label={`Supprimer la charge fixe : ${rec.label}`}
-                          title="Supprimer"
-                        >
-                          ×
-                        </button>
+                      <li key={`recurring-${rec.id}`} className={editor ? "ops-row ops-row-editing" : "ops-row"}>
+                        {editor ? (
+                          <OperationEditForm
+                            idPrefix={`edit-${key}`}
+                            kind={editor.kind}
+                            draft={editor.draft}
+                            errors={editor.errors}
+                            saveError={editor.saveError}
+                            saving={editSaving}
+                            categories={categoryOptionsFor(editor.kind, editor.baseline.categoryId)}
+                            onChange={changeEditDraft}
+                            onSubmit={handleEditSubmit}
+                            onCancel={cancelEdit}
+                          />
+                        ) : (
+                          <>
+                            <span className="ops-kind ops-kind-recurring">Charge fixe</span>
+                            <span className="ops-label">{rec.label}</span>
+                            <span className="ops-meta">
+                              <CategoryDot color={categoryDotColor(rec.category_id, data.categories)} />
+                              {categoryName} · {rec.day_of_month !== null ? `le ${rec.day_of_month} du mois` : "jour non défini"}
+                            </span>
+                            <span className="ops-amount">{formatEUR(rec.amount)}</span>
+                            <span className="ops-actions">
+                              <button
+                                id={editButtonId(key)}
+                                type="button"
+                                className="ops-edit"
+                                onClick={() => beginEdit("recurring", rec)}
+                                disabled={navigating || editSaving}
+                                aria-label={`Modifier la charge fixe : ${rec.label}`}
+                              >
+                                Modifier
+                              </button>
+                              <button
+                                type="button"
+                                className="ops-delete"
+                                onClick={() => deleteWithUndo(rec.id, "recurring")}
+                                disabled={navigating || editSaving}
+                                aria-label={`Supprimer la charge fixe : ${rec.label}`}
+                                title="Supprimer"
+                              >
+                                ×
+                              </button>
+                            </span>
+                          </>
+                        )}
                       </li>
                     );
                   })}
@@ -1295,7 +1572,7 @@ export default function Dashboard() {
             </div>
             <div className="form-actions">
               {formError?.form === "income" && <p role="alert" className="field-error">{formError.message}</p>}
-              <button type="submit" className="btn-primary" disabled={savingForm !== null || navigating}>
+              <button type="submit" className="btn-primary" disabled={savingForm !== null || navigating || editSaving}>
                 {savingForm === "income" ? "Enregistrement…" : "Ajouter"}
               </button>
             </div>
@@ -1365,7 +1642,7 @@ export default function Dashboard() {
             </div>
             <div className="form-actions">
               {formError?.form === "expense" && <p role="alert" className="field-error">{formError.message}</p>}
-              <button type="submit" className="btn-primary" disabled={savingForm !== null || navigating}>
+              <button type="submit" className="btn-primary" disabled={savingForm !== null || navigating || editSaving}>
                 {savingForm === "expense" ? "Enregistrement…" : "Ajouter"}
               </button>
             </div>
@@ -1440,7 +1717,7 @@ export default function Dashboard() {
             </div>
             <div className="form-actions">
               {formError?.form === "recurring" && <p role="alert" className="field-error">{formError.message}</p>}
-              <button type="submit" className="btn-primary" disabled={savingForm !== null || navigating}>
+              <button type="submit" className="btn-primary" disabled={savingForm !== null || navigating || editSaving}>
                 {savingForm === "recurring" ? "Enregistrement…" : "Ajouter"}
               </button>
             </div>

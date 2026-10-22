@@ -399,21 +399,135 @@ button {
   font-weight: 500;
 }
 
+/* Delete: grey at rest, red on hover, visible focus, disabled style. The hit area stays 32px. */
 .ops-delete {
   width: 32px;
   height: 32px;
   border: none;
   border-radius: var(--radius-md);
   background: none;
-  color: var(--color-expense);
+  color: var(--text-secondary);
   font-size: 1.2rem;
   line-height: 1;
   cursor: pointer;
 }
 
+.ops-delete:hover:not(:disabled) {
+  color: var(--color-expense);
+  background: rgba(239, 68, 68, 0.12);
+}
+
+.ops-delete:focus-visible,
+.ops-edit:focus-visible,
+.btn-ghost:focus-visible {
+  outline: 2px solid var(--color-income);
+  outline-offset: 2px;
+}
+
 .ops-delete:disabled {
   opacity: 0.5;
   cursor: not-allowed;
+}
+
+.ops-actions {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-1);
+}
+
+.ops-edit {
+  padding: var(--spacing-1) var(--spacing-2);
+  border: 1px solid var(--surface-border);
+  border-radius: var(--radius-md);
+  background: none;
+  color: var(--text-secondary);
+  font: inherit;
+  font-size: var(--text-sm);
+  cursor: pointer;
+}
+
+.ops-edit:hover:not(:disabled) {
+  color: var(--text-primary);
+  border-color: var(--text-secondary);
+}
+
+.ops-edit:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.btn-ghost {
+  padding: var(--spacing-2) var(--spacing-3);
+  border: 1px solid var(--surface-border);
+  border-radius: var(--radius-md);
+  background: none;
+  color: var(--text-secondary);
+  font: inherit;
+  cursor: pointer;
+}
+
+.btn-ghost:hover:not(:disabled) {
+  color: var(--text-primary);
+  border-color: var(--text-secondary);
+}
+
+.btn-ghost:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+/* Row in edit mode: the form takes the whole row */
+.ops-row-editing {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.ops-edit-form {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+  gap: var(--spacing-2);
+  align-items: start;
+  width: 100%;
+}
+
+.ops-edit-actions {
+  grid-column: 1 / -1;
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  align-items: center;
+  gap: var(--spacing-2);
+}
+
+.ops-edit-actions .field-error {
+  margin-right: auto;
+}
+
+/* Colored dot before a category name; a neutral ring when the entry has no category */
+.cat-dot {
+  display: inline-block;
+  flex: 0 0 auto;
+  width: 10px;
+  height: 10px;
+  margin-right: var(--spacing-1);
+  border-radius: 50%;
+  vertical-align: middle;
+}
+
+.cat-dot-none {
+  background: transparent;
+  border: 1.5px solid var(--text-secondary);
+}
+
+.ops-empty-state {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--spacing-2);
+}
+
+.ops-card h2:focus-visible {
+  outline: 2px solid var(--color-income);
+  outline-offset: 2px;
 }
 
 .ops-empty {

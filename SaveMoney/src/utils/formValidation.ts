@@ -5,6 +5,11 @@
 
 export const DATE_PATTERN = /^\d{4}-\d{2}-\d{2}$/;
 
+// Messages shared by the add forms and the inline edit
+export const LABEL_REQUIRED = "Le libellé est requis";
+export const AMOUNT_INVALID = "Saisissez un montant supérieur à 0";
+export const DAY_INVALID = "Saisissez un jour entier entre 1 et 31";
+
 // Returns the amount as a strictly positive finite number, or null when invalid.
 export function parseAmount(value: string): number | null {
   if (value.trim() === "") return null;

@@ -33,7 +33,7 @@ export const UNCATEGORIZED_LABEL = "Sans catégorie";
 
 // An entry is uncategorized when it has no category or refers to a category that does not exist.
 // A category really named "Sans catégorie" keeps its own id and is not uncategorized.
-function isUncategorized(categoryId: number | null, categories: ChartCategory[]): boolean {
+export function isUncategorized(categoryId: number | null, categories: ChartCategory[]): boolean {
   return categoryId === null || !categories.some((cat) => cat.id === categoryId);
 }
 
