@@ -14,6 +14,7 @@ import { useGoals } from "../hooks/useGoals";
 import { useDebts } from "../hooks/useDebts";
 import { formatEUR } from "../utils/formatEUR";
 import { isValidCalendarDate, monthOfDate, parseAmount, parseDayOfMonth } from "../utils/formValidation";
+import { DeferredDeletionQueue, type DeletableType, type PendingDeletion } from "../utils/deferredDeletions";
 
 ChartJS.register(BarElement, CategoryScale, LinearScale, Tooltip, Legend);
 
@@ -28,6 +29,13 @@ const AMOUNT_INVALID = "Saisissez un montant supérieur à 0";
 const DATE_REQUIRED = "Choisissez une date valide";
 const DAY_INVALID = "Saisissez un jour entier entre 1 et 31";
 const SAVE_ERROR_MESSAGE = "L'enregistrement a échoué. Vos saisies sont conservées.";
+const DELETE_FAILED_MESSAGE = "La suppression a échoué. La ligne est restée enregistrée.";
+
+const DELETE_SQL: Record<DeletableType, string> = {
+  income: "DELETE FROM incomes WHERE id = ?",
+  expense: "DELETE FROM expenses WHERE id = ?",
+  recurring: "DELETE FROM recurring_expenses WHERE id = ?",
+};
 
 type ToastTone = "success" | "error";
 
@@ -123,7 +131,8 @@ export default function Dashboard() {
   const [debtDueDateError, setDebtDueDateError] = useState("");
 
   // Pending deletions for undo feature
-  const [pendingDeletions, setPendingDeletions] = useState<Array<{id: number, type: 'income' | 'expense' | 'recurring', timestamp: number}>>([]);
+  // Rows hidden while their deletion can still be undone
+  const [pendingDeletions, setPendingDeletions] = useState<PendingDeletion[]>([]);
 
   // Active category filter (from chart click)
   const [activeFilterCategory, setActiveFilterCategory] = useState<string | null>(null);
@@ -179,6 +188,28 @@ export default function Dashboard() {
     setToasts((prev) => [...prev, { id, message, tone, action }]);
     toastTimersRef.current.set(id, setTimeout(() => dismissToast(id), durationMs));
   };
+
+  // Deletions can finish after a month change, so they must reach the latest refresh
+  const refreshRef = useRef(refresh);
+  useEffect(() => {
+    refreshRef.current = refresh;
+  }, [refresh]);
+
+  const [deletionQueue] = useState(
+    () =>
+      new DeferredDeletionQueue({
+        delayMs: 5000,
+        schedule: (run, delayMs) => setTimeout(run, delayMs),
+        cancel: (handle) => clearTimeout(handle as ReturnType<typeof setTimeout>),
+        execute: async (type, id) => {
+          const db = await getDb();
+          await db.execute(DELETE_SQL[type], [id]);
+        },
+        onChange: setPendingDeletions,
+        onSuccess: () => refreshRef.current(),
+        onFailure: () => showToast(DELETE_FAILED_MESSAGE, "error"),
+      })
+  );
 
   if (loading || goalsLoading || debtsLoading || !data || !goalsData || !debtsData) {
     return (
@@ -391,56 +422,21 @@ export default function Dashboard() {
     }
   }
 
-  // Delete with undo functionality
-  async function deleteWithUndo(id: number, type: 'income' | 'expense' | 'recurring') {
-    // Generate a unique timestamp for this deletion
-    const timestamp = Date.now();
-
-    // Add to pending deletions
-    setPendingDeletions(prev => [...prev, { id, type, timestamp }]);
-
-    // Show undo toast
-    showToastWithUndo(`Opération supprimée`, () => undoDeletion(id, type, timestamp));
-
-    // Actually delete after delay (5 seconds)
-    setTimeout(async () => {
-      // Check if this deletion is still pending (not undone)
-      const stillPending = pendingDeletions.some(item =>
-        item.id === id && item.type === type && item.timestamp === timestamp
-      );
-
-      if (stillPending) {
-        // Remove from pending deletions
-        setPendingDeletions(prev => prev.filter(item =>
-          !(item.id === id && item.type === type && item.timestamp === timestamp)
-        ));
-
-        // Perform actual deletion
-        const db = await getDb();
-        if (type === 'income') {
-          await db.execute("DELETE FROM incomes WHERE id = ?", [id]);
-        } else if (type === 'expense') {
-          await db.execute("DELETE FROM expenses WHERE id = ?", [id]);
-        } else if (type === 'recurring') {
-          await db.execute("DELETE FROM recurring_expenses WHERE id = ?", [id]);
-        }
-
-        refresh();
-      }
-    }, 5000); // 5 seconds
+  // Delete with undo: the row is hidden at once, the DELETE runs after 5 seconds unless undone
+  function deleteWithUndo(id: number, type: DeletableType) {
+    const key = deletionQueue.schedule(id, type);
+    showToastWithUndo("Opération supprimée", () => undoDeletion(key));
   }
 
-  // Undo a deletion
-  function undoDeletion(id: number, type: 'income' | 'expense' | 'recurring', timestamp: number) {
-    // Remove from pending deletions
-    setPendingDeletions(prev => prev.filter(item =>
-      !(item.id === id && item.type === type && item.timestamp === timestamp)
-    ));
-
-    showToast("Suppression annulée");
+  function undoDeletion(key: number) {
+    if (deletionQueue.undo(key)) {
+      showToast("Suppression annulée");
+    } else {
+      showToast("La suppression est déjà en cours et ne peut plus être annulée.");
+    }
   }
 
-  // Undo toast: the deletion itself is unchanged, only the toast is rendered by React
+  // Undo toast rendered by React; its action cancels the queued deletion
   function showToastWithUndo(message: string, undoAction: () => void) {
     showToast(message, "success", { label: "Annuler", run: undoAction }, 5000);
   }
