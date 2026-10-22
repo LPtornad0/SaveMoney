@@ -15,6 +15,9 @@ import { useDebts } from "../hooks/useDebts";
 import { formatEUR } from "../utils/formatEUR";
 import { isValidCalendarDate, monthOfDate, parseAmount, parseDayOfMonth } from "../utils/formValidation";
 import { DeferredDeletionQueue, type DeletableType, type PendingDeletion } from "../utils/deferredDeletions";
+import { createCloseGate } from "../utils/closeGate";
+import { isTauri } from "@tauri-apps/api/core";
+import { getCurrentWindow } from "@tauri-apps/api/window";
 
 ChartJS.register(BarElement, CategoryScale, LinearScale, Tooltip, Legend);
 
@@ -30,6 +33,10 @@ const DATE_REQUIRED = "Choisissez une date valide";
 const DAY_INVALID = "Saisissez un jour entier entre 1 et 31";
 const SAVE_ERROR_MESSAGE = "L'enregistrement a échoué. Vos saisies sont conservées.";
 const DELETE_FAILED_MESSAGE = "La suppression a échoué. La ligne est restée enregistrée.";
+const MONTH_PATTERN = /^\d{4}-\d{2}$/;
+const MONTH_CHANGE_FAILED_MESSAGE =
+  "Changement de mois annulé : une suppression n'a pas pu être finalisée. Vous restez sur ce mois.";
+const UNDO_FINALIZING_MESSAGE = "Finalisation de la suppression…";
 
 const DELETE_SQL: Record<DeletableType, string> = {
   income: "DELETE FROM incomes WHERE id = ?",
@@ -43,7 +50,7 @@ interface ToastItem {
   id: number;
   message: string;
   tone: ToastTone;
-  action?: { label: string; run: () => void };
+  action?: { label: string; run: () => void; disabled?: boolean };
 }
 
 // Rendered outside the loading guard so a toast stays visible while data reloads.
@@ -59,6 +66,7 @@ function ToastRegion({ toasts, onDismiss }: { toasts: ToastItem[]; onDismiss: (i
               <button
                 type="button"
                 className="toast-action"
+                disabled={action.disabled}
                 onClick={() => {
                   action.run();
                   onDismiss(toast.id);
@@ -152,6 +160,11 @@ export default function Dashboard() {
   const [toasts, setToasts] = useState<ToastItem[]>([]);
   const toastIdRef = useRef(0);
   const toastTimersRef = useRef(new Map<number, ReturnType<typeof setTimeout>>());
+  const undoToastIdsRef = useRef(new Set<number>());
+
+  // Set while a month change or a window close finalizes the pending deletions
+  const [navigating, setNavigating] = useState(false);
+  const navigatingRef = useRef(false);
 
   useEffect(() => {
     const timers = toastTimersRef.current;
@@ -179,12 +192,14 @@ export default function Dashboard() {
       clearTimeout(timer);
       toastTimersRef.current.delete(id);
     }
+    undoToastIdsRef.current.delete(id);
     setToasts((prev) => prev.filter((toast) => toast.id !== id));
   };
 
   const showToast = (message: string, tone: ToastTone = "success", action?: ToastItem["action"], durationMs = 3000) => {
     toastIdRef.current += 1;
     const id = toastIdRef.current;
+    if (action) undoToastIdsRef.current.add(id);
     setToasts((prev) => [...prev, { id, message, tone, action }]);
     toastTimersRef.current.set(id, setTimeout(() => dismissToast(id), durationMs));
   };
@@ -206,10 +221,46 @@ export default function Dashboard() {
           await db.execute(DELETE_SQL[type], [id]);
         },
         onChange: setPendingDeletions,
-        onSuccess: () => refreshRef.current(),
+        // During a month change the caller reloads once, so no intermediate reload here
+        onSuccess: () => {
+          if (!navigatingRef.current) refreshRef.current();
+        },
         onFailure: () => showToast(DELETE_FAILED_MESSAGE, "error"),
       })
   );
+
+  // Closing the window finalizes the pending deletions first. Tauri listener: the decision lives in closeGate.
+  useEffect(() => {
+    if (!isTauri()) return;
+    let unlisten: (() => void) | undefined;
+    let disposed = false;
+    const gate = createCloseGate({
+      hasPending: () => deletionQueue.hasPending(),
+      flush: async () => {
+        navigatingRef.current = true;
+        setNavigating(true);
+        try {
+          return { failed: await finalizePendingDeletions() };
+        } finally {
+          navigatingRef.current = false;
+          setNavigating(false);
+        }
+      },
+      close: () => getCurrentWindow().close(),
+      onBlocked: (message) => showToast(message, "error"),
+    });
+    getCurrentWindow()
+      .onCloseRequested(gate)
+      .then((stop) => {
+        if (disposed) stop();
+        else unlisten = stop;
+      })
+      .catch((error) => console.error("Failed to listen for window close", error));
+    return () => {
+      disposed = true;
+      unlisten?.();
+    };
+  }, []);
 
   if (loading || goalsLoading || debtsLoading || !data || !goalsData || !debtsData) {
     return (
@@ -256,7 +307,7 @@ export default function Dashboard() {
 
   // Runs one save at a time; a second submit while saving is ignored.
   async function runSave(form: FormKind, save: () => Promise<void>): Promise<boolean> {
-    if (savingRef.current) return false;
+    if (savingRef.current || navigatingRef.current) return false;
     savingRef.current = true;
     setSavingForm(form);
     setFormError(null);
@@ -333,14 +384,28 @@ export default function Dashboard() {
     setExpenseAmount("");
     setExpenseDate("");
     setExpenseCategory("");
-    showToast("Dépense ajoutée avec succès");
-    pendingFocusRef.current = "expense";
-    if (monthChanged) {
-      // Switching month reloads the data through useMonthlyBudget.
-      setMonth(targetMonth);
-    } else {
+    if (!monthChanged) {
+      showToast("Dépense ajoutée avec succès");
+      pendingFocusRef.current = "expense";
       refresh();
+      return;
     }
+
+    // The expense is saved at this point: whatever the month change does, it must not be submitted again.
+    const status = await requestMonthChange(targetMonth);
+    if (status === "changed") {
+      showToast("Dépense ajoutée avec succès");
+      pendingFocusRef.current = "expense";
+      return;
+    }
+    const reason =
+      status === "failed"
+        ? "une suppression en attente n'a pas pu être finalisée"
+        : "un autre changement de mois est en cours";
+    showToast(
+      `La dépense est enregistrée dans ${formatMonthLabel(targetMonth)}. Vous restez sur ${formatMonthLabel(month)} : ${reason}. Ne la soumettez pas à nouveau.`,
+      "error"
+    );
   }
 
   async function handleRecurringSubmit(event: FormEvent<HTMLFormElement>) {
@@ -422,8 +487,57 @@ export default function Dashboard() {
     }
   }
 
+  // Undo actions cannot be used once finalization has started: they show it instead of disappearing silently
+  function disableUndoToasts() {
+    const ids = undoToastIdsRef.current;
+    setToasts((prev) =>
+      prev.map((toast) =>
+        ids.has(toast.id) && toast.action
+          ? { ...toast, message: UNDO_FINALIZING_MESSAGE, action: { ...toast.action, disabled: true } }
+          : toast
+      )
+    );
+  }
+
+  function dismissUndoToasts() {
+    for (const id of Array.from(undoToastIdsRef.current)) dismissToast(id);
+  }
+
+  // Runs every pending deletion; returns how many failed. Failed rows are visible again, so the list is reloaded.
+  async function finalizePendingDeletions(): Promise<number> {
+    disableUndoToasts();
+    const outcomes = await deletionQueue.flushAll();
+    dismissUndoToasts();
+    const failed = outcomes.filter((outcome) => !outcome.ok).length;
+    if (failed > 0) refreshRef.current();
+    return failed;
+  }
+
+  // Single entry point for every month change (selector and expense saved in another month)
+  async function requestMonthChange(target: string): Promise<"changed" | "unchanged" | "blocked" | "failed"> {
+    if (target === month || !MONTH_PATTERN.test(target)) return "unchanged";
+    if (navigatingRef.current) return "blocked";
+    navigatingRef.current = true;
+    setNavigating(true);
+    try {
+      const failed = await finalizePendingDeletions();
+      if (failed > 0) return "failed";
+      setMonth(target);
+      return "changed";
+    } finally {
+      navigatingRef.current = false;
+      setNavigating(false);
+    }
+  }
+
+  async function handleMonthInput(target: string) {
+    const status = await requestMonthChange(target);
+    if (status === "failed") showToast(MONTH_CHANGE_FAILED_MESSAGE, "error");
+  }
+
   // Delete with undo: the row is hidden at once, the DELETE runs after 5 seconds unless undone
   function deleteWithUndo(id: number, type: DeletableType) {
+    if (navigatingRef.current) return;
     const key = deletionQueue.schedule(id, type);
     showToastWithUndo("Opération supprimée", () => undoDeletion(key));
   }
@@ -535,7 +649,8 @@ export default function Dashboard() {
         <input
           type="month"
           value={month}
-          onChange={(e) => setMonth(e.target.value)}
+          disabled={navigating}
+          onChange={(e) => void handleMonthInput(e.target.value)}
           style={inputStyle}
         />
       </div>
@@ -1058,7 +1173,7 @@ export default function Dashboard() {
             </div>
             <div className="form-actions">
               {formError?.form === "income" && <p role="alert" className="field-error">{formError.message}</p>}
-              <button type="submit" className="btn-primary" disabled={savingForm !== null}>
+              <button type="submit" className="btn-primary" disabled={savingForm !== null || navigating}>
                 {savingForm === "income" ? "Enregistrement…" : "Ajouter"}
               </button>
             </div>
@@ -1129,6 +1244,7 @@ export default function Dashboard() {
                       {/* Delete button */}
                       <button
                         onClick={() => deleteWithUndo(income.id, 'income')}
+                        disabled={navigating}
                         aria-label="Supprimer ce revenu"
                         title="Supprimer ce revenu"
                         style={{
@@ -1228,7 +1344,7 @@ export default function Dashboard() {
             </div>
             <div className="form-actions">
               {formError?.form === "expense" && <p role="alert" className="field-error">{formError.message}</p>}
-              <button type="submit" className="btn-primary" disabled={savingForm !== null}>
+              <button type="submit" className="btn-primary" disabled={savingForm !== null || navigating}>
                 {savingForm === "expense" ? "Enregistrement…" : "Ajouter"}
               </button>
             </div>
@@ -1299,6 +1415,7 @@ export default function Dashboard() {
                       {/* Delete button */}
                       <button
                         onClick={() => deleteWithUndo(expense.id, 'expense')}
+                        disabled={navigating}
                         aria-label="Supprimer cette dépense"
                         title="Supprimer cette dépense"
                         style={{
@@ -1406,7 +1523,7 @@ export default function Dashboard() {
             </div>
             <div className="form-actions">
               {formError?.form === "recurring" && <p role="alert" className="field-error">{formError.message}</p>}
-              <button type="submit" className="btn-primary" disabled={savingForm !== null}>
+              <button type="submit" className="btn-primary" disabled={savingForm !== null || navigating}>
                 {savingForm === "recurring" ? "Enregistrement…" : "Ajouter"}
               </button>
             </div>
@@ -1474,6 +1591,7 @@ export default function Dashboard() {
                       {/* Delete button */}
                       <button
                         onClick={() => deleteWithUndo(recurring.id, 'recurring')}
+                        disabled={navigating}
                         aria-label="Supprimer cette charge fixe"
                         title="Supprimer cette charge fixe"
                         style={{

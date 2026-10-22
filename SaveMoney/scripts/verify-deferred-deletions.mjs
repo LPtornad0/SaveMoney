@@ -1,4 +1,6 @@
 // Vérifie la file de suppressions différées avec une horloge simulée (aucun SQL réel).
+// Ces tests couvrent la logique de la file uniquement : ils ne prouvent pas la fermeture
+// de la fenêtre ni le comportement dans Tauri (voir les tests manuels).
 // Usage : node scripts/verify-deferred-deletions.mjs
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
@@ -21,13 +23,15 @@ const { DeferredDeletionQueue } = moduleObject.exports;
 const DELAY = 5000;
 const flush = () => new Promise((resolve) => setImmediate(resolve));
 
-// Horloge simulée : les timers sont déclenchés uniquement par advance().
-function createHarness({ failIds = new Set() } = {}) {
+// Horloge simulée : les timers ne se déclenchent que via advance().
+// `execute` peut échouer pour certains identifiants, ou attendre une libération manuelle.
+function createHarness({ failIds = new Set(), manualRelease = false } = {}) {
   let now = 0;
   const timers = [];
   const executed = [];
   const successes = [];
   const failures = [];
+  const releases = [];
   let lastPending = [];
   const queue = new DeferredDeletionQueue({
     delayMs: DELAY,
@@ -39,9 +43,15 @@ function createHarness({ failIds = new Set() } = {}) {
     cancel: (timer) => {
       timer.cancelled = true;
     },
-    execute: async (type, id) => {
+    execute: (type, id) => {
       executed.push({ type, id, at: now });
-      if (failIds.has(id)) throw new Error("SQL failure");
+      const attempt = async () => {
+        if (failIds.has(id)) throw new Error("SQL failure");
+      };
+      if (!manualRelease) return attempt();
+      return new Promise((resolve, reject) => {
+        releases.push(() => attempt().then(resolve, reject));
+      });
     },
     onChange: (pending) => {
       lastPending = pending;
@@ -55,6 +65,7 @@ function createHarness({ failIds = new Set() } = {}) {
     successes,
     failures,
     timers,
+    releases,
     pending: () => lastPending,
     async advance(ms) {
       now += ms;
@@ -97,14 +108,13 @@ function createHarness({ failIds = new Set() } = {}) {
 // 3. Plusieurs suppressions en parallèle, indépendantes
 {
   const h = createHarness();
-  const a = h.queue.schedule(1, "income"); // expire à t = 5000
+  h.queue.schedule(1, "income"); // expire à t = 5000
   await h.advance(1000);
   const b = h.queue.schedule(2, "expense"); // expire à t = 6000
   await h.advance(1000);
-  const c = h.queue.schedule(3, "recurring"); // expire à t = 7000
+  h.queue.schedule(3, "recurring"); // expire à t = 7000
   assert.equal(h.pending().length, 3);
 
-  // Annulation de B seulement
   assert.equal(h.queue.undo(b), true);
   assert.deepEqual(h.pending().map((p) => p.id).sort(), [1, 3]);
 
@@ -113,7 +123,6 @@ function createHarness({ failIds = new Set() } = {}) {
   await h.advance(2000); // t = 7000 : C expire, B n'est jamais exécuté
   assert.deepEqual(h.executed.map((e) => e.id), [1, 3]);
   assert.equal(h.pending().length, 0);
-  assert.ok(a && c, "les trois clés ont été créées");
   console.log("OK  plusieurs suppressions : annulation de B sans effet sur A et C");
 }
 
@@ -122,13 +131,12 @@ function createHarness({ failIds = new Set() } = {}) {
   const h = createHarness();
   const oldKey = h.queue.schedule(20, "expense");
   h.queue.undo(oldKey);
-  const newKey = h.queue.schedule(20, "expense"); // même ligne, nouvelle opération
+  const newKey = h.queue.schedule(20, "expense");
   assert.notEqual(oldKey, newKey);
-  // Déclenche directement l'ancien timer, même annulé
-  h.timers[0].run();
+  h.timers[0].run(); // ancien timer, déjà annulé
   await flush();
   assert.equal(h.executed.length, 0, "l'ancien timer ne doit rien exécuter");
-  assert.deepEqual(h.pending().map((p) => p.key), [newKey], "la nouvelle opération reste en attente");
+  assert.deepEqual(h.pending().map((p) => p.key), [newKey]);
   await h.advance(DELAY);
   assert.equal(h.executed.length, 1, "la nouvelle opération est exécutée à son propre délai");
   console.log("OK  ancien timer : aucune exécution, nouvelle opération intacte");
@@ -150,26 +158,106 @@ function createHarness({ failIds = new Set() } = {}) {
 
 // 6. Annulation pendant l'exécution SQL : refusée, un seul DELETE
 {
-  let release;
-  const executed = [];
-  const queue = new DeferredDeletionQueue({
-    delayMs: DELAY,
-    schedule: (run) => setTimeout(run, 0),
-    cancel: (handle) => clearTimeout(handle),
-    execute: (type, id) => new Promise((resolve) => { executed.push(id); release = resolve; }),
-    onChange: () => {},
-    onSuccess: () => {},
-    onFailure: () => {},
-  });
-  const key = queue.schedule(40, "expense");
-  // Laisse le timer simulé se déclencher
-  await new Promise((resolve) => setTimeout(resolve, 5));
-  assert.deepEqual(executed, [40], "le DELETE a démarré");
-  assert.equal(queue.undo(key), false, "annulation refusée pendant l'exécution");
-  release();
+  const h = createHarness({ manualRelease: true });
+  const key = h.queue.schedule(40, "expense");
+  await h.advance(DELAY); // le timer lance le DELETE
+  assert.equal(h.executed.length, 1, "le DELETE a démarré");
+  assert.equal(h.queue.undo(key), false, "annulation refusée pendant l'exécution");
+  h.releases[0]();
   await flush();
-  assert.deepEqual(executed, [40], "toujours un seul DELETE");
+  assert.equal(h.executed.length, 1, "toujours un seul DELETE");
   console.log("OK  annulation pendant l'exécution : refusée, un seul DELETE");
 }
 
-console.log("Toutes les vérifications de suppression différée sont passées.");
+// 7. Finalisation forcée de plusieurs suppressions en attente
+{
+  const h = createHarness();
+  h.queue.schedule(50, "income");
+  h.queue.schedule(51, "expense");
+  h.queue.schedule(52, "recurring");
+  const outcomes = await h.queue.flushAll();
+  assert.equal(outcomes.length, 3);
+  assert.ok(outcomes.every((o) => o.ok), "toutes les suppressions réussissent");
+  assert.deepEqual(h.executed.map((e) => e.id).sort(), [50, 51, 52]);
+  assert.equal(h.queue.hasPending(), false);
+  await h.advance(DELAY * 2); // les timers annulés ne relancent rien
+  assert.equal(h.executed.length, 3, "aucun DELETE supplémentaire après la finalisation");
+  console.log("OK  finalisation forcée : plusieurs suppressions exécutées une fois chacune");
+}
+
+// 8. Finalisation qui attend une suppression déjà en cours
+{
+  const h = createHarness({ manualRelease: true });
+  h.queue.schedule(60, "expense");
+  await h.advance(DELAY); // DELETE 60 en cours, pas encore résolu
+  h.queue.schedule(61, "income");
+  let settled = false;
+  const finalization = h.queue.flushAll().then((outcomes) => {
+    settled = true;
+    return outcomes;
+  });
+  await flush();
+  assert.equal(settled, false, "la finalisation attend la suppression en cours");
+  assert.equal(h.executed.length, 2, "61 démarre, 60 n'est pas relancé");
+  h.releases.forEach((release) => release());
+  const outcomes = await finalization;
+  assert.equal(settled, true);
+  assert.deepEqual(outcomes.map((o) => o.item.id).sort(), [60, 61]);
+  assert.equal(h.executed.filter((e) => e.id === 60).length, 1, "60 n'a jamais été exécuté deux fois");
+  console.log("OK  attente d'une suppression en cours : finalisation terminée après elle");
+}
+
+// 9. Pas de doublon entre le timer et la finalisation forcée
+{
+  const h = createHarness();
+  h.queue.schedule(70, "recurring");
+  await h.queue.flushAll();
+  await h.advance(DELAY * 2); // le timer, déjà annulé, ne doit rien faire
+  assert.equal(h.executed.length, 1);
+  console.log("OK  timer et finalisation : un seul DELETE");
+}
+
+// 10. Plusieurs finalisations simultanées : un seul DELETE par opération
+{
+  const h = createHarness({ manualRelease: true });
+  h.queue.schedule(80, "expense");
+  h.queue.schedule(81, "income");
+  const runs = [h.queue.flushAll(), h.queue.flushAll(), h.queue.flushAll()];
+  assert.equal(h.executed.length, 2, "chaque opération démarre une seule fois");
+  h.releases.forEach((release) => release());
+  const results = await Promise.all(runs);
+  results.forEach((outcomes) => assert.equal(outcomes.length, 2));
+  assert.equal(h.executed.length, 2);
+  console.log("OK  finalisations simultanées : un seul DELETE par opération");
+}
+
+// 11. Échec partiel : les réussites sont acquises, l'échec redevient accessible
+{
+  const h = createHarness({ failIds: new Set([91]) });
+  h.queue.schedule(90, "income");
+  h.queue.schedule(91, "expense");
+  h.queue.schedule(92, "recurring");
+  const outcomes = await h.queue.flushAll();
+  assert.deepEqual(outcomes.map((o) => o.ok), [true, false, true]);
+  assert.equal(h.successes.length, 2);
+  assert.equal(h.failures.length, 1);
+  assert.equal(h.queue.hasPending(), false, "la ligne en échec n'est plus masquée");
+  assert.ok(h.queue.schedule(91, "expense") > 0, "l'opération peut être relancée");
+  console.log("OK  échec partiel : réussites conservées, échec signalé et accessible");
+}
+
+// 12. Annulation impossible après démarrage ou fin
+{
+  const h = createHarness();
+  const finishedKey = h.queue.schedule(100, "income");
+  await h.queue.flushAll();
+  assert.equal(h.queue.undo(finishedKey), false, "une opération terminée ne peut plus être annulée");
+  const runningKey = h.queue.schedule(101, "income");
+  const running = h.queue.flushAll();
+  assert.equal(h.queue.undo(runningKey), false, "une opération en cours ne peut plus être annulée");
+  await running;
+  assert.equal(h.executed.filter((e) => e.id === 101).length, 1);
+  console.log("OK  annulation impossible après démarrage ou fin");
+}
+
+console.log("Toutes les vérifications de la file de suppression sont passées.");
