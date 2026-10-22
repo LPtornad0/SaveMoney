@@ -1,146 +1,49 @@
 import { useEffect, useState, useCallback } from "react";
 import { getDb, initSchema } from "../db/client";
-import type { Income, Expense, RecurringExpense, Category } from "../types/budget";
-import { summarizeMonth } from "../utils/computeSummary";
+import { emptyMonthBudget, fetchMonthBudget, type MonthlyBudgetData } from "../utils/monthBudget";
+import { createRequestGate, runLatest } from "../utils/requestGate";
 
-export interface MonthlyBudgetData {
-  incomes: Income[];
-  expenses: Expense[];
-  recurringExpenses: RecurringExpense[];
-  categories: Category[];
-  totalIncome: number;
-  totalExpense: number;
-  totalRecurring: number;
-  totalSavings: number;
-  available: number;
-  // Previous month data for variation calculations
-  previousTotalIncome?: number;
-  previousTotalExpense?: number;
-  previousTotalRecurring?: number;
-  previousTotalSavings?: number;
-  previousAvailable?: number;
-  // Variation (current - previous)
-  variationIncome?: number;
-  variationExpense?: number;
-  variationRecurring?: number;
-  variationSavings?: number;
-  variationAvailable?: number;
-}
+export type { MonthlyBudgetData } from "../utils/monthBudget";
 
 export function useMonthlyBudget(month: string) {
   const [data, setData] = useState<MonthlyBudgetData | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [requests] = useState(createRequestGate);
 
   const load = useCallback(async () => {
-    try {
-      setLoading(true);
-      setError(null);
+    setLoading(true);
+    setError(null);
 
-      const db = await getDb();
-      await initSchema();
+    await runLatest(
+      requests,
+      async () => {
+        const db = await getDb();
+        await initSchema();
+        return fetchMonthBudget(db, month);
+      },
+      {
+        onResult: (result) => setData(result),
+        onError: (err) => {
+          console.error("Failed to load monthly budget", err);
+          const message =
+            err instanceof Error && err.message
+              ? err.message
+              : "Vérifie la base de données.";
 
-      // Helper to calculate previous month in YYYY-MM format
-      const getPreviousMonth = (currentMonth: string): string => {
-        const [year, month] = currentMonth.split('-').map(Number);
-        let prevMonth = month - 1;
-        let prevYear = year;
-        if (prevMonth < 1) {
-          prevMonth = 12;
-          prevYear = year - 1;
-        }
-        return `${prevYear.toString().padStart(4, '0')}-${prevMonth.toString().padStart(2, '0')}`;
-      };
-
-      const currentMonthData = await Promise.all([
-        db.select<Income[]>("SELECT * FROM incomes WHERE month = ? ORDER BY date DESC", [month]),
-        db.select<Expense[]>("SELECT * FROM expenses WHERE month = ? ORDER BY date DESC", [month]),
-        db.select<RecurringExpense[]>("SELECT * FROM recurring_expenses WHERE active = 1", []),
-        db.select<Category[]>("SELECT * FROM categories ORDER BY name", [])
-      ]);
-
-      const previousMonthData = await Promise.all([
-        db.select<Income[]>("SELECT * FROM incomes WHERE month = ? ORDER BY date DESC", [getPreviousMonth(month)]),
-        db.select<Expense[]>("SELECT * FROM expenses WHERE month = ? ORDER BY date DESC", [getPreviousMonth(month)]),
-        db.select<RecurringExpense[]>("SELECT * FROM recurring_expenses WHERE active = 1", []),
-        db.select<Category[]>("SELECT * FROM categories ORDER BY name", [])
-      ]);
-
-      const [incomes, expenses, recurringExpenses, categories] = currentMonthData;
-      const [previousIncomes, previousExpenses, previousRecurringExpenses, previousCategories] = previousMonthData;
-
-      // Both months go through the same classification (savings separated from expenses)
-      const currentSummary = summarizeMonth({ incomes, expenses, recurringExpenses, categories });
-      const previousSummary = summarizeMonth({
-        incomes: previousIncomes,
-        expenses: previousExpenses,
-        recurringExpenses: previousRecurringExpenses,
-        categories: previousCategories
-      });
-
-      // Extract calculated values for current month
-      const totalSavings = currentSummary.epargneTotal;
-      const totalExpense = currentSummary.depensesTotal;
-      const totalRecurring = currentSummary.chargesFixesTotal;
-      const available = currentSummary.disponible;
-      const totalIncome = currentSummary.revenusTotal;
-
-      // Calculate variations (current - previous)
-      const variationIncome = totalIncome - previousSummary.revenusTotal;
-      const variationExpense = totalExpense - previousSummary.depensesTotal;
-      const variationRecurring = totalRecurring - previousSummary.chargesFixesTotal;
-      const variationSavings = totalSavings - previousSummary.epargneTotal;
-      const variationAvailable = available - previousSummary.disponible;
-
-      setData({
-        incomes,
-        expenses,
-        recurringExpenses,
-        categories,
-        totalIncome,
-        totalExpense,
-        totalRecurring,
-        totalSavings,
-        available,
-        // Store previous month data for variation calculations (optional - we could just store variations)
-        previousTotalIncome: previousSummary.revenusTotal,
-        previousTotalExpense: previousSummary.depensesTotal,
-        previousTotalRecurring: previousSummary.chargesFixesTotal,
-        previousTotalSavings: previousSummary.epargneTotal,
-        previousAvailable: previousSummary.disponible,
-        variationIncome,
-        variationExpense,
-        variationRecurring,
-        variationSavings,
-        variationAvailable
-      });
-    } catch (err) {
-      console.error("Failed to load monthly budget", err);
-      const message =
-        err instanceof Error && err.message
-          ? err.message
-          : "Vérifie la base de données.";
-
-      setError(`Impossible de charger les données. ${message}`);
-      setData({
-        incomes: [],
-        expenses: [],
-        recurringExpenses: [],
-        categories: [],
-        totalIncome: 0,
-        totalExpense: 0,
-        totalRecurring: 0,
-        totalSavings: 0,
-        available: 0,
-      });
-    } finally {
-      setLoading(false);
-    }
-  }, [month]);
+          setError(`Impossible de charger les données. ${message}`);
+          setData(emptyMonthBudget());
+        },
+        onSettled: () => setLoading(false),
+      }
+    );
+  }, [month, requests]);
 
   useEffect(() => {
     load();
-  }, [load]);
+    // Results of the previous month are ignored once the month changes or the component unmounts
+    return () => requests.invalidate();
+  }, [load, requests]);
 
   return { data, loading, error, refresh: load };
 }
