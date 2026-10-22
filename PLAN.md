@@ -165,16 +165,27 @@ Limites conservées :
 
 ## Phase 8 : Évolutions fonctionnelles (optionnelles, une par une, sur validation)
 
-**Statut : une fonctionnalité partiellement présente (objectifs), les autres non commencées.** Chaque point demande une validation préalable.
+**Statut : premier lot livré et validé par retour manuel dans Tauri** (objectifs : montant courant modifiable, suppression annulable, commit de lot, voir `git log`). **Le reste de la phase 8 n'est pas commencé.** Ce statut ne marque pas la phase 8 comme terminée. Chaque point demande une validation préalable.
 
 1. **Budgets par catégorie** avec barres de progression et alerte de dépassement (nouvelle table `budgets` → migration à valider). Non commencé.
-2. **Objectif d'épargne** avec jauge de progression. **Partiellement présent, pas entièrement utilisable** : création d'un objectif, barre de progression et pourcentage affichés. Aucune interface ne modifie le montant courant, ni ne modifie ou supprime un objectif : la jauge reste à 0 % en pratique. Ce point n'est donc pas déclaré réalisé.
+2. **Objectif d'épargne** : **premier lot livré** : modification du montant courant (remplacement, pas de versement additionné ; zéro et décimales acceptés ; montant réel conservé au-delà de la cible ; jauge et pourcentage plafonnés à 100 %) et suppression différée annulable pendant 5 secondes, avec les gardes existantes (brouillon modifié, sauvegarde, navigation de mois, filtre, fermeture). Restent hors lot : modification du libellé, de la cible ou de la date ; lien automatique entre objectif et épargne mensuelle.
 3. **Courbe d'évolution** revenus/dépenses sur plusieurs mois (Chart.js `Line`). Non commencé.
 4. **Export CSV** (via les commandes/plugins Tauri de fichiers, après accord sur les permissions de `capabilities/`). Non commencé.
 5. **Récurrence automatique** des charges fixes. Non commencé.
 6. **Thème clair** optionnel via `prefers-color-scheme`. Non commencé.
 
+Vérifications automatisées du premier lot : douze scripts, dont `verify-goals.mjs` (validation du montant, brouillon, plafonnement, suppression différée du type `goal`), TypeScript et build passent.
+
+Tests manuels dans Tauri : retour utilisateur positif sur la checklist du lot.
+
+Limites et scénarios non vérifiés pour ce lot :
+- Échecs SQL non simulés (écriture du montant, suppression) : non vérifiés.
+- Blocages pendant une sauvegarde, trop rapides pour être observés : non vérifiés.
+- Câblage React (brouillon, gardes, focus, confirmation) : non testé automatiquement.
+- Démontage temporaire de la page pendant le rechargement des objectifs après une sauvegarde : limite connue, conservée.
+
 **Hors plan, à suivre :**
+- Message « Opération supprimée » : affiché avant l'écriture effective de la suppression, dans le comportement des opérations. Correction séparée, non traitée dans le premier lot.
 - Formulaires Objectifs et Dettes : en lecture DOM, sans messages d'erreur reliés aux champs. La barre de dette est toujours à 100 %, faute de remboursements enregistrés. Amélioration éventuelle, distincte.
 - Chargement mensuel : corrigé (`f148113`), les réponses obsolètes sont ignorées.
 - Perte de focus et démontage temporaire du formulaire d'édition pendant un rechargement : limite connue, à évaluer.
@@ -193,7 +204,7 @@ Limites conservées :
 | 5 | `feat(ui): formulaires avec labels, validation et feedback` | `bc839ac` |
 | 6 | `fix(ui)`, `fix(budget)` : suppression différée, finalisation avant navigation et fermeture | `e9ac9f8`, `8a7dde4`, `119a4e5` |
 | 7 | `feat(a11y): navigation de mois, sélecteur clavier, focus et contrastes` | Voir `git log` (commit de phase 7) |
-| 8 | un commit par fonctionnalité | Non commencé |
+| 8 | un commit par fonctionnalité : lot 1 objectifs (montant courant, suppression annulable) | Voir `git log` (commit du lot 1) ; reste non commencé |
 
 Commits hors plan : `ca711ec` (premier commit de la phase 5, antérieur au périmètre validé, remplacé par `bc839ac`) ; `6e11674` (corrections de calcul mensuel, types des hooks et compilation) ; `2432581` (watcher Vite).
 

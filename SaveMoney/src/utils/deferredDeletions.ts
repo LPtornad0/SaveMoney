@@ -3,7 +3,7 @@
  * Timers and database access are injected, so the queue can be tested without React or Tauri.
  */
 
-export type DeletableType = "income" | "expense" | "recurring";
+export type DeletableType = "income" | "expense" | "recurring" | "goal";
 
 export interface PendingDeletion {
   key: number;

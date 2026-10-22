@@ -2,23 +2,25 @@
 
 Ce fichier décrit l'état opérationnel de la session. Le plan et les décisions durables sont dans `PLAN.md`.
 Chemins relatifs à la racine du dépôt git, sauf mention contraire.
-État de référence : **2026-10-22**, après le lot de phase 7 (commit de phase 7, voir `git log`). **Cet état git doit être revérifié à la reprise** (section 9).
+État de référence : **2026-10-22**, après le premier lot de phase 8 (objectifs : montant courant et suppression annulable). **Cet état git doit être revérifié à la reprise** (section 9).
 
 ## 1. Projet et architecture
 
 **Stack** : React 19 + TypeScript, Vite, hooks, Chart.js + react-chartjs-2, CSS (`App.css`), Tauri v2 (Rust), SQLite via `@tauri-apps/plugin-sql`.
 
 **Chemins**
-- Racine du dépôt git : `.` (contient le dossier `SaveMoney/` et `node_modules/` suivi par git).
+- Racine du dépôt git : `.` (contient le dossier `SaveMoney/`). `node_modules/` n'est plus suivi (section 7).
 - Application (là où se lancent `npm` et `tauri`) : `SaveMoney/`.
 - Dans l'application : `src/`, `src-tauri/`, `scripts/`, `package.json`, `vite.config.ts`.
 - Un `package.json` et un `package-lock.json` existent aussi à la racine du dépôt. Ils ne sont pas utilisés pour les commandes. Leur rôle reste à clarifier.
 
 **Fichiers principaux** (dans `SaveMoney/src/`)
-- `pages/Dashboard.tsx` : page unique. Sélecteur de mois avec flèches, KPI, graphique avec sélecteur clavier de catégorie, « Opérations du mois » et « Charges fixes actives » (édition en ligne), objectifs, dettes, formulaires, toasts, suppression différée, filtre au clic, garde de fermeture.
-- `components/OperationEditForm.tsx` : formulaire d'édition d'une ligne, focus sur les champs en erreur.
+- `pages/Dashboard.tsx` : page unique. Sélecteur de mois avec flèches, KPI, graphique avec sélecteur clavier de catégorie, « Opérations du mois » et « Charges fixes actives » (édition en ligne), objectifs (montant courant éditable, suppression annulable), dettes, formulaires, toasts, suppression différée, filtre au clic, garde de fermeture.
+- `components/OperationEditForm.tsx` : formulaire d'édition d'une opération, focus sur les champs en erreur.
+- `components/GoalAmountForm.tsx` : formulaire d'édition du montant courant d'un objectif, libellé visible, erreur reliée au champ.
 - `hooks/useMonthlyBudget.ts` : chargement du mois affiché, ignore les réponses obsolètes (`runLatest`).
-- `hooks/useGoals.ts`, `hooks/useDebts.ts` : objectifs et dettes (partiels, voir section 7).
+- `hooks/useGoals.ts` : objectifs. `updateGoal` est utilisé ; `deleteGoal` ne l'est pas (la suppression passe par la file différée).
+- `hooks/useDebts.ts` : dettes (partielles, voir section 7).
 - `db/client.ts` : connexion SQLite et schéma (`initSchema`, en TypeScript, pas de migrations Rust).
 - `types/budget.ts` : types métier.
 - `utils/computeSummary.ts` : calcul pur des totaux, `summarizeMonth`, `isSavingsCategory`.
@@ -26,12 +28,13 @@ Chemins relatifs à la racine du dépôt git, sauf mention contraire.
 - `utils/monthNavigation.ts` : `addMonths`, décalage de mois au format `YYYY-MM`.
 - `utils/requestGate.ts` : `createRequestGate` et `runLatest`.
 - `utils/formValidation.ts` : règles pures et messages partagés (ajout et édition).
+- `utils/goalRules.ts` : règles du montant courant d'un objectif (validation, brouillon, plafonnement de la jauge).
 - `utils/chartRows.ts` : lignes du graphique, filtre à trois états.
 - `utils/categoryFilterOptions.ts` : options et encodage du sélecteur clavier (pas de logique de filtrage propre).
 - `utils/operations.ts` : tri des opérations et des charges fixes, format de date.
 - `utils/categoryColor.ts` : couleur stable des pastilles, calculée à partir de l'identifiant.
-- `utils/inlineEdit.ts` : règles de l'édition (comparaison, validation, UPDATE paramétrés, transitions, garde de sauvegarde `createSaveGuard` / `runGuarded`).
-- `utils/deferredDeletions.ts` : file de suppressions différées (`DeferredDeletionQueue`).
+- `utils/inlineEdit.ts` : règles de l'édition des opérations (comparaison, validation, UPDATE paramétrés, transitions, garde de sauvegarde `createSaveGuard` / `runGuarded`).
+- `utils/deferredDeletions.ts` : file de suppressions différées (`DeferredDeletionQueue`), types `income`, `expense`, `recurring` et `goal`.
 - `utils/closeGate.ts` : décision de fermeture (`createCloseGate`, et `createEditAwareClose` qui vérifie le brouillon d'abord).
 - `utils/formatEUR.ts` : formatage en euros.
 - `App.css` : tokens de thème (dont `--on-color` et `--control-border`), mise en page, formulaires, opérations, boutons, focus visible.
@@ -45,7 +48,7 @@ Chemins relatifs à la racine du dépôt git, sauf mention contraire.
 - **Pas de push sans autorisation explicite**, à chaque fois. Une autorisation de commit ne vaut pas autorisation de push.
 - **Aucune nouvelle dépendance** sans demande préalable.
 - **Aucune modification du schéma SQLite** ni des calculs financiers sans accord explicite.
-- Préserver les modifications locales et ne pas toucher à `node_modules` (ni nettoyage, ni suppression de fichiers non suivis sans accord).
+- Préserver les modifications locales. `node_modules` : ne pas toucher à son contenu sur disque sans accord.
 - Commits : indexer explicitement les fichiers du lot (jamais `git add .` ni `-A`). Vérifier le diff indexé.
 - Ne pas déclarer une validation fonctionnelle à partir de tests automatisés seuls. Ne pas déclarer validés des scénarios d'erreur simulés non testés dans Tauri. Ne pas présenter un retour manuel comme un audit d'accessibilité.
 - Une demande de **proposition** n'est pas une autorisation de coder : attendre l'accord explicite.
@@ -70,9 +73,12 @@ Chemins relatifs à la racine du dépôt git, sauf mention contraire.
 - `9dc0948` : phase 4, graphique pleine largeur et deux cartes côte à côte.
 - `4379315` : `PLAN.md` mis à jour (documentaire seul).
 - `f148113` : correction du chargement mensuel (réponses obsolètes ignorées).
-- `119a4e5` : phase 6, édition en ligne, pastilles de catégorie, boutons `.ops-delete`, états vides. Validée manuellement dans Tauri.
+- `119a4e5` : phase 6, édition en ligne, pastilles de catégorie, boutons `.ops-delete`, états vides.
 - `e6e583d` : `docs(plan)`, documentation de la phase 6 et du fichier de reprise.
-- Commit de phase 7 : `feat(a11y): navigation de mois, sélecteur clavier, focus et contrastes` (identifiant : voir `git log`).
+- `134c671` : phase 7, navigation de mois, sélecteur clavier, focus et contrastes.
+- `e577b47` : commit ajoutant au suivi git des fichiers sous `node_modules/` (confirmé par l'utilisateur comme une erreur de sa part). Défait par `1887eef`.
+- `1887eef` : `chore(git)`, retrait de `node_modules/` du suivi et `.gitignore` racine.
+- Commit du premier lot de phase 8 : `feat(goals): montant courant modifiable et suppression annulable des objectifs` (identifiant : voir `git log`).
 
 **Par phase**
 - **Phase 1** : réalisée (tokens, typographie, `formatEUR`, `max-width`). Styles inline encore présents dans le Dashboard.
@@ -80,9 +86,9 @@ Chemins relatifs à la racine du dépôt git, sauf mention contraire.
 - **Phase 3** : réalisée et validée manuellement dans Tauri (`74d838a`).
 - **Phase 4** : réalisée et validée visuellement dans Tauri (`9dc0948`).
 - **Phase 5** : périmètre validé pour Revenu, Dépense, Charge fixe (`bc839ac`). Fusion des formulaires **écartée**. Catégorie des revenus **conservée**.
-- **Phase 6** : réalisée et validée manuellement dans Tauri (`119a4e5`), sur le périmètre de `PLAN.md`. Scénarios d'erreur SQL et de fermeture simulée **non testés dans Tauri**, non déclarés validés.
-- **Phase 7** : réalisée, retour manuel positif dans Tauri. **Ce n'est pas un audit d'accessibilité** : pas de Lighthouse ni d'axe, contrastes calculés à partir du code.
-- **Phase 8** : non commencée, sauf les objectifs partiels (voir section 7). **Non autorisée pour l'instant.**
+- **Phase 6** : réalisée et validée manuellement dans Tauri (`119a4e5`). Scénarios d'erreur SQL et de fermeture simulée **non testés dans Tauri**.
+- **Phase 7** : réalisée, retour manuel positif dans Tauri (`134c671`). **Ce n'est pas un audit d'accessibilité** : pas de Lighthouse ni d'axe, contrastes calculés à partir du code.
+- **Phase 8** : **premier lot livré et validé** (objectifs : montant courant, suppression annulable). **Le reste de la phase 8 n'est pas commencé** : budgets, courbe multi-mois, export CSV, récurrence, thème clair. La phase 8 n'est pas marquée comme terminée.
 
 ## 5. Décisions produit à préserver
 
@@ -90,14 +96,16 @@ Chemins relatifs à la racine du dépôt git, sauf mention contraire.
 - **Formulaires** : Revenu, Dépense, Charge fixe séparés. Fusion écartée.
 - **Catégorie des revenus** : conservée volontairement.
 - **Graphique** : dépenses ponctuelles + charges fixes, hors épargne, lignes à total strictement positif, tri décroissant, ligne « Sans catégorie ».
-- **Filtre** : trois états (aucun, catégorie par identifiant, sans catégorie). Trois moyens de le changer, même chemin (`changeFilter`) : clic sur une barre, puce, sélecteur clavier « Filtrer la liste par catégorie » (options : toutes, lignes du graphique, « Sans catégorie » si représentée, filtre actif absent du graphique marqué « (absente du graphique) »). Réinitialisé uniquement après un changement de mois réussi.
-- **Suppression** : différée 5 s avec « Annuler ». Finalisation forcée avant un changement de mois et avant la fermeture normale. Un refus de fermeture ne lance pas la finalisation forcée ; le minuteur normal d'une suppression en attente continue.
+- **Filtre** : trois états (aucun, catégorie par identifiant, sans catégorie). Trois moyens de le changer, même chemin (`changeFilter`) : clic sur une barre, puce, sélecteur clavier « Filtrer la liste par catégorie ». Réinitialisé uniquement après un changement de mois réussi.
+- **Suppression** : différée 5 s avec « Annuler ». Finalisation forcée avant un changement de mois et avant la fermeture normale. Un refus de fermeture ne lance pas la finalisation forcée ; le minuteur normal d'une suppression en attente continue. Valable pour les opérations et pour les objectifs.
 - **Changement de mois** : centralisé dans `requestMonthChange`, y compris pour une dépense datée d'un autre mois. Les flèches ‹ › et le sélecteur passent par ce même point d'entrée. Format `YYYY-MM` conservé.
-- **Blocage pendant un enregistrement d'édition** : navigation de mois (flèches et sélecteur), filtre, autre ligne, fermeture et suppressions bloqués. Décision validée, conservée.
-- **Édition en ligne** : une ligne à la fois ; libellé, montant, catégorie (et jour pour les charges fixes) ; dates et mois non modifiables ; objectifs et dettes exclus. Confirmation avant abandon d'un brouillon réellement modifié. Succès jamais renvoyé ; erreur SQL affichée sur la ligne.
+- **Blocage pendant un enregistrement** : navigation de mois, filtre, autre édition, fermeture et suppressions bloqués. Décision validée, conservée.
+- **Édition en ligne des opérations** : une ligne à la fois ; libellé, montant, catégorie (et jour pour les charges fixes) ; dates et mois non modifiables. Confirmation avant abandon d'un brouillon réellement modifié. Succès jamais renvoyé ; erreur SQL affichée sur la ligne.
+- **Montant courant d'un objectif** (lot 1 de phase 8) : la saisie remplace le montant, elle n'est pas additionnée. Zéro et décimales acceptés ; vide, négatif, non numérique ou non fini refusés. Au-delà de la cible, le montant réel est conservé ; seuls la jauge et le pourcentage sont plafonnés à 100 %. Pendant l'édition, les boutons « Modifier le montant » et × de l'objectif sont remplacés par le formulaire (décision validée). Aucun effet sur Disponible, Épargne, revenus, dépenses ni graphiques.
+- **Suppression d'un objectif** : différée 5 s avec annulation, via la même file que les opérations. Le message affiché au départ est « Objectif en cours de suppression » ; il ne déclare pas le succès.
 - **Épargne** : « Épargne » proposée pour les dépenses et les charges fixes, pas pour les revenus. Classification existante (`summarizeMonth`, `isSavingsCategory`), sans nouvelle règle.
 - **Pastilles** : palette calculée à partir de l'identifiant, rien n'est écrit en base. « Sans catégorie » en anneau neutre.
-- **Texte sur couleurs pleines** : sombre (`--on-color`, `#0F0F10`) sur les fonds colorés, pour atteindre le contraste. Les textes secondaires et les variations dans les cartes KPI héritent de la couleur de la carte ; le signe `+` ou `-` porte le sens.
+- **Texte sur couleurs pleines** : sombre (`--on-color`, `#0F0F10`) sur les fonds colorés. Les textes secondaires et les variations dans les cartes KPI héritent de la couleur de la carte ; le signe `+` ou `-` porte le sens.
 - **Format du mois** : le code utilise `YYYY-MM`. Ce format ne doit pas être changé pour reproduire une notation du plan initial.
 
 ## 6. Vérifications
@@ -115,57 +123,63 @@ node scripts/verify-inline-edit.mjs        # 11 groupes
 node scripts/verify-month-navigation.mjs   # 4 groupes
 node scripts/verify-category-filter.mjs    # 7 groupes
 node scripts/verify-contrast.mjs           # mesures calculées à partir du code (voir limites)
+node scripts/verify-goals.mjs              # 4 groupes : validation, brouillon, plafonnement, suppression différée (goal)
 npx tsc --noEmit
 npm run build
 npm run tauri dev                          # lancement Tauri, à lancer manuellement
 ```
-Dernière exécution avant le commit de phase 7 : les onze scripts passent, `tsc` et `build` ont le code 0.
+Dernière exécution avant le commit du premier lot de phase 8 : les douze scripts passent, `tsc` et `build` ont le code 0.
 
-**Tests automatisés** : fonctions pures et logique extraite (file de suppressions, garde de fermeture, `runLatest` et `fetchMonthBudget`, règles de formulaire, règles d'édition, garde de sauvegarde, lignes du graphique, tri, pastilles, calcul des mois, options du sélecteur, contrastes calculés). **Ils n'exécutent pas le composant React, ni les effets de hooks, ni le câblage des flèches, du sélecteur ou du focus, ni le rendu Chart.js, ni `window.confirm`, ni le SQL réel, ni la fenêtre Tauri.**
+**Tests automatisés** : fonctions pures et logique extraite (file de suppressions, garde de fermeture, `runLatest` et `fetchMonthBudget`, règles de formulaire, règles d'édition, garde de sauvegarde, lignes du graphique, tri, pastilles, calcul des mois, options du sélecteur, contrastes calculés, règles du montant courant d'un objectif). **Ils n'exécutent pas le composant React, ni les effets de hooks, ni le câblage des gardes, du focus, des flèches, du sélecteur ou des objectifs, ni le rendu Chart.js, ni `window.confirm`, ni le SQL réel, ni la fenêtre Tauri.**
 
 **Contrastes** : `verify-contrast.mjs` calcule les ratios WCAG à partir des valeurs écrites dans `App.css`, `categoryColor.ts` et `Dashboard.tsx`. Il ne rend rien. Il ne remplace ni Lighthouse, ni axe, ni un contrôle à l'écran.
 
-**Tests manuels rapportés par l'utilisateur dans Tauri**
+**Tests manuels rapportés par l'utilisateur dans Tauri, passés**
 - Phase 3 : tri, montants, valeurs sur les barres, clic et second clic, ligne « Sans catégorie », réinitialisation après changement de mois.
 - Phase 4 : disposition validée visuellement.
 - Phase 5 : formulaires Revenu, Dépense, Charge fixe.
 - Suppression différée, annulation, finalisation avant changement de mois et fermeture (scénarios sans erreur simulée).
 - Chargement mensuel : quatre scénarios.
 - Phase 6 (`119a4e5`) : édition et sauvegarde, double envoi, conservation du brouillon après suppression d'une autre ligne, refus d'abandon au changement de mois et à la fermeture, sortie du filtre après sauvegarde, validation des champs, pastilles, états vides et boutons.
-- Phase 7 : retour utilisateur **positif** sur la checklist de phase 7 (flèches et passages d'année, confirmation avec les flèches et le sélecteur, synchronisation du sélecteur, du graphique et de la puce, Tab et Maj+Tab, focus après suppression, retrait de filtre et erreur de validation, lisibilité). Ce retour ne vaut pas certification d'accessibilité.
+- Phase 7 (`134c671`) : retour utilisateur **positif** sur la checklist de phase 7. Ce retour ne vaut pas certification d'accessibilité.
+- Phase 8, premier lot : retour utilisateur **positif** sur la checklist du lot : remplacement du montant (zéro, décimales), dépassement de la cible, saisies invalides avec message et focus, annulation d'un brouillon (refus conserve, acceptation restaure sans enregistrer), protections au changement de mois, de filtre et d'autre édition, suppression d'un objectif de test et annulation dans les 5 secondes, suppression laissée à échéance et persistance après réouverture, persistance d'un montant après réouverture, retour du focus après sauvegarde, absence d'effet sur Disponible, Épargne, revenus, dépenses et graphiques.
 
-**Scénarios non testés dans Tauri** (ne pas les déclarer validés)
-- Erreur SQL simulée pendant une suppression, un ajout, une bascule ou une édition.
+**Scénarios non vérifiés** (ne pas les déclarer validés)
+- Échecs SQL non simulés : écriture du montant d'un objectif, suppression d'un objectif.
+- Blocages pendant une sauvegarde : trop rapides pour être observés, non vérifiés.
+- Erreur SQL simulée pendant une suppression, un ajout, une bascule ou une édition d'opération.
 - Erreur de fermeture simulée (permission refusée ou équivalente).
-- Réponse de rechargement en erreur après un `UPDATE` réussi.
+- Réponse de rechargement en erreur après une écriture réussie.
+- Câblage React des gardes, du focus et des objectifs : non testé automatiquement.
 
 **Non mesuré ou non vérifié**
 - Lighthouse et axe : non exécutés.
 - Contrastes sur le rendu réel : non mesurés. Placeholders (aucune couleur définie dans le projet), styles natifs des `select` et des champs date/mois, états désactivés (opacité) : non mesurés comme contrastes.
 - Ordre de tabulation : retour manuel seulement, sans audit complet.
-- Câblage React de la phase 7 : non couvert par les tests automatisés.
 
 ## 7. Points techniques ouverts
 
-- **Perte de focus et démontage temporaire pendant un rechargement** : après une suppression ou un ajout, le Dashboard affiche « Chargement... », ce qui démonte le formulaire d'édition. Le brouillon est conservé dans l'état et les champs le restituent, mais le focus est perdu et une frappe pendant la fenêtre de chargement est perdue. Le focus de repli de la phase 7 ne couvre pas ce cas. **Limite connue, non corrigée** ; à traiter séparément, sur accord.
+- **Démontage temporaire pendant un rechargement** : après une suppression, un ajout ou une sauvegarde d'objectif, le Dashboard affiche « Chargement... », ce qui démonte les formulaires. L'état est conservé et les champs le restituent, mais le focus est perdu et une frappe pendant la fenêtre de chargement est perdue. **Limite connue, non corrigée**, à traiter séparément, sur accord.
+- **Message « Opération supprimée »** : affiché avant l'écriture effective de la suppression d'une opération. Il annonce un succès non encore acquis. **Correction séparée, non traitée dans le premier lot de phase 8.** Le message des objectifs (« Objectif en cours de suppression ») ne pose pas ce problème.
+- **`deleteGoal`** (dans `useGoals.ts`) : inutilisé. Il supprimerait immédiatement et rechargerait les objectifs, ce qui contournerait la file différée. À supprimer ou à garder en l'état, à décider.
 - **Touche Échap** : non gérée pour annuler une édition. Non ajoutée, sur décision.
-- **Formulaires Objectifs et Dettes** : non refondus. Libellés non reliés aux champs, messages d'erreur non reliés, boutons « Ajouter » sans état de survol. Hors périmètre validé.
+- **Formulaires Objectifs (création) et Dettes** : non refondus. Libellés non reliés aux champs, messages d'erreur non reliés, boutons « Ajouter » sans état de survol. Hors périmètre validé.
 - **Version `@tauri-apps/api`** : `package.json` demande `2.11.5`, `node_modules` installe `2.11.1`. Décision à prendre.
 - **Règle date/mois des revenus** : un revenu est enregistré avec la date du jour, dans le mois affiché. Règle inchangée, à discuter.
-- **Objectifs d'épargne** : création, barre et pourcentage affichés. Aucune interface ne modifie `current_amount` ni ne modifie ou supprime un objectif : la jauge reste à 0 %.
 - **Dettes** : liste et ajout. La barre est fixe à 100 %, faute de remboursements enregistrés.
 - **Édition en ligne** : une catégorie stockée qui n'existe plus apparaît sous le libellé « Catégorie introuvable ».
 - **Chargement mensuel** : les requêtes ne sont pas annulées, leurs résultats obsolètes sont ignorés.
 - **Montants personnels dans `PLAN.md`** : deux montants issus du plan d'origine (section Phase 2, question sur le Disponible) sont restés dans le fichier. Non modifiés à ce jour, à anonymiser ultérieurement sur accord.
-- **Dépôt git** : `node_modules` est suivi par git à la racine du dépôt (environ 2 700 fichiers). Une copie accidentelle antérieure a laissé 30 entrées non suivies sous `node_modules/` (`.vite/deps/`, sous-dossiers de `@tauri-apps`), non supprimées sur demande. Intervention distincte, après accord.
+- **Dépôt git** : `node_modules/` n'est plus suivi (`1887eef`). Les fichiers restent présents sur disque et sont ignorés par le `.gitignore` racine. Les commits antérieurs (y compris `e577b47`) restent dans l'historique.
 
 ## 8. Prochaine étape
 
-**Phase 7 validée par le retour manuel**, commit de phase 7 créé, documentation à jour. **Aucune tâche autorisée pour l'instant.**
+**Premier lot de phase 8 validé** (objectifs : montant courant, suppression annulable). Commit créé, documentation à jour. **Aucune tâche autorisée pour l'instant.**
 
-- Push des commits locaux sur `origin/ui-refonte` : **non autorisé** à ce stade, à autoriser séparément.
-- Phase 8 : **non autorisée**. Ne pas commencer les fonctionnalités optionnelles.
-- Correction de la perte de focus pendant le rechargement : **non autorisée** sans accord.
+- Push du commit du premier lot sur `origin/ui-refonte` : **non autorisé** à ce stade, à autoriser séparément.
+- Autres options de la phase 8 (budgets, courbe multi-mois, export CSV, récurrence, thème clair) : **non cadrées, non autorisées**. Chacune demande un cadrage et une validation séparés.
+- Correction du message « Opération supprimée » : **non autorisée** à ce stade.
+- Correction du démontage pendant le rechargement : **non autorisée** sans accord.
 - Anonymisation des montants de `PLAN.md` : **non autorisée** pour l'instant.
 
 ## 9. Reprise
@@ -175,4 +189,4 @@ La première action de la prochaine session :
 2. Lancer `git fetch origin ui-refonte`, puis vérifier l'écart `git rev-list --left-right --count origin/ui-refonte...HEAD`.
 3. Ne reprendre que la tâche autorisée (section 8).
 
-**État git (daté au 2026-10-22, à revérifier à la reprise)** : au moment de la rédaction de cette section, la branche `ui-refonte` avait le commit de phase 7 en avance sur `origin/ui-refonte`, non poussé. Ces points changent après un push ou un nouveau commit. Les 30 entrées non suivies sous `node_modules/` ne font pas partie des commits du lot.
+**État git (daté au 2026-10-22, à revérifier à la reprise)** : au moment de la rédaction, la branche `ui-refonte` avait le commit du premier lot de phase 8 en avance sur `origin/ui-refonte`, non poussé. Ces points changent après un push ou un nouveau commit. Les fichiers sous `node_modules/` ne sont plus suivis et ne font pas partie des commits du lot.

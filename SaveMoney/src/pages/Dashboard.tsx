@@ -55,6 +55,8 @@ import {
 import { categoryDotColor } from "../utils/categoryColor";
 import { addMonths } from "../utils/monthNavigation";
 import { OperationEditForm, type CategoryOption } from "../components/OperationEditForm";
+import { GoalAmountForm } from "../components/GoalAmountForm";
+import { GOAL_AMOUNT_INVALID, GOAL_SAVE_ERROR, goalProgress, isGoalDraftChanged, parseCurrentAmount } from "../utils/goalRules";
 import { isTauri } from "@tauri-apps/api/core";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 
@@ -100,6 +102,7 @@ const UNDO_FINALIZING_MESSAGE = "Finalisation de la suppression…";
 const EDIT_SAVING_CLOSE_MESSAGE = "Enregistrement en cours : la fermeture est annulée. Réessayez dans un instant.";
 const OPERATIONS_HEADING_ID = "ops-operations-heading";
 const CHARGES_HEADING_ID = "ops-recurring-heading";
+const GOALS_HEADING_ID = "goals-heading";
 const MONTH_CHANGE_BLOCKED_REASON = "le changement de mois est bloqué pour le moment";
 
 // The row being edited. Only one at a time; the draft is kept until it is saved or dropped.
@@ -110,6 +113,16 @@ interface EditingRow {
   baseline: EditBaseline;
   draft: EditDraft;
   errors: EditErrors;
+  saveError: string | null;
+}
+
+// The goal whose current amount is being edited. Shares the single-edit rule with the operations.
+interface GoalEditing {
+  id: number;
+  key: string;
+  baseline: number;
+  draft: string;
+  error: string | null;
   saveError: string | null;
 }
 
@@ -128,6 +141,7 @@ const DELETE_SQL: Record<DeletableType, string> = {
   income: "DELETE FROM incomes WHERE id = ?",
   expense: "DELETE FROM expenses WHERE id = ?",
   recurring: "DELETE FROM recurring_expenses WHERE id = ?",
+  goal: "DELETE FROM goals WHERE id = ?",
 };
 
 type ToastTone = "success" | "error";
@@ -175,7 +189,7 @@ function formatMonthLabel(yearMonth: string): string {
 export default function Dashboard() {
   const [month, setMonth] = useState(currentMonth());
   const { data, loading, error, refresh } = useMonthlyBudget(month);
-  const { data: goalsData, loading: goalsLoading, error: goalsError, refresh: refreshGoals, addGoal } = useGoals();
+  const { data: goalsData, loading: goalsLoading, error: goalsError, refresh: refreshGoals, addGoal, updateGoal } = useGoals();
   const { data: debtsData, loading: debtsLoading, error: debtsError, refresh: refreshDebts, addDebt } = useDebts();
 
   // Formulaires
@@ -238,9 +252,11 @@ export default function Dashboard() {
   const [editGuard] = useState(createSaveGuard);
   // Read by the close listener, which is mounted once: updated after each render
   const editDirty = editing !== null && isDraftChanged(editing.kind, editing.baseline, editing.draft);
-  const editGuardRef = useRef({ dirty: false });
+  const [goalEditing, setGoalEditing] = useState<GoalEditing | null>(null);
+  const goalDirty = goalEditing !== null && isGoalDraftChanged(goalEditing.baseline, goalEditing.draft);
+  const editGuardRef = useRef({ opsDirty: false, goalDirty: false });
   useEffect(() => {
-    editGuardRef.current = { dirty: editDirty };
+    editGuardRef.current = { opsDirty: editDirty, goalDirty };
   });
   // Focus target after a save or a cancel: the row's edit button, or the list heading if the row is gone
   const pendingEditFocusRef = useRef<string | null>(null);
@@ -294,12 +310,15 @@ export default function Dashboard() {
   // Focus after a save or a cancel. It waits for the reloaded list, so the target exists.
   useEffect(() => {
     const key = pendingEditFocusRef.current;
-    if (key === null || loading || !data) return;
-    const fallbackId = key.startsWith("recurring-") ? CHARGES_HEADING_ID : OPERATIONS_HEADING_ID;
+    if (key === null || loading || goalsLoading || !data || !goalsData) return;
+    const fallbackId =
+      key.startsWith("recurring-") ? CHARGES_HEADING_ID
+      : key.startsWith("goal-") ? GOALS_HEADING_ID
+      : OPERATIONS_HEADING_ID;
     const target = document.getElementById(editButtonId(key)) ?? document.getElementById(fallbackId);
     target?.focus();
     pendingEditFocusRef.current = null;
-  }, [editing, loading, data]);
+  }, [editing, goalEditing, loading, goalsLoading, data, goalsData]);
 
   // Focus is moved only when it was lost (on the body): a focus the user placed elsewhere is never taken away.
   useEffect(() => {
@@ -322,6 +341,15 @@ export default function Dashboard() {
       showToast("L'opération n'est plus disponible. La modification est annulée.", "error");
     }
   }, [editing, loading, data]);
+
+  // Same rule for the goal being edited
+  useEffect(() => {
+    if (!goalEditing || goalsLoading || !goalsData) return;
+    if (!goalsData.goals.some((goal) => goal.id === goalEditing.id)) {
+      setGoalEditing(null);
+      showToast("L'objectif n'est plus disponible. La modification est annulée.", "error");
+    }
+  }, [goalEditing, goalsLoading, goalsData]);
 
   const dismissToast = (id: number) => {
     const timer = toastTimersRef.current.get(id);
@@ -346,6 +374,11 @@ export default function Dashboard() {
   useEffect(() => {
     refreshRef.current = refresh;
   }, [refresh]);
+  // Goal deletions reload the goals, not the monthly data
+  const refreshGoalsRef = useRef(refreshGoals);
+  useEffect(() => {
+    refreshGoalsRef.current = refreshGoals;
+  }, [refreshGoals]);
 
   const [deletionQueue] = useState(
     () =>
@@ -359,7 +392,11 @@ export default function Dashboard() {
         },
         onChange: setPendingDeletions,
         // During a month change the caller reloads once, so no intermediate reload here
-        onSuccess: () => {
+        onSuccess: (item) => {
+          if (item.type === "goal") {
+            refreshGoalsRef.current();
+            return;
+          }
           if (!navigatingRef.current) refreshRef.current();
         },
         onFailure: () => showToast(DELETE_FAILED_MESSAGE, "error"),
@@ -390,10 +427,13 @@ export default function Dashboard() {
     // Read through refs and guard objects: this listener is mounted once.
     const handleCloseRequest = createEditAwareClose({
       isSaving: () => editGuard.isSaving(),
-      isDirty: () => editGuardRef.current.dirty,
+      isDirty: () => editGuardRef.current.opsDirty || editGuardRef.current.goalDirty,
       confirmDiscard: () => window.confirm(EDIT_DISCARD_MESSAGE),
       onSaving: () => showToast(EDIT_SAVING_CLOSE_MESSAGE, "error"),
-      discardEdit: () => setEditing(null),
+      discardEdit: () => {
+        setEditing(null);
+        setGoalEditing(null);
+      },
       gate,
     });
     getCurrentWindow()
@@ -453,6 +493,7 @@ export default function Dashboard() {
   const recurringRows = sortRecurring(filteredRecurringExpenses).filter(
     (rec) => !isPendingDeletion(rec.id, "recurring")
   );
+  const visibleGoals = goalsData.goals.filter((goal) => !isPendingDeletion(goal.id, "goal"));
 
   // Runs one save at a time; a second submit while saving is ignored.
   async function runSave(form: FormKind, save: () => Promise<void>): Promise<boolean> {
@@ -669,6 +710,7 @@ export default function Dashboard() {
     // The edit check comes before any finalization: a refused change leaves the pending deletions alone
     if (editTransition() === "blocked") return "blocked";
     setEditing(null);
+    setGoalEditing(null);
     navigatingRef.current = true;
     setNavigating(true);
     try {
@@ -698,9 +740,11 @@ export default function Dashboard() {
   // Delete with undo: the row is hidden at once, the DELETE runs after 5 seconds unless undone
   function deleteWithUndo(id: number, type: DeletableType) {
     if (navigatingRef.current || editGuard.isSaving()) return;
-    focusFallbackRef.current = type === "recurring" ? CHARGES_HEADING_ID : OPERATIONS_HEADING_ID;
+    focusFallbackRef.current =
+      type === "recurring" ? CHARGES_HEADING_ID : type === "goal" ? GOALS_HEADING_ID : OPERATIONS_HEADING_ID;
     const key = deletionQueue.schedule(id, type);
-    showToastWithUndo("Opération supprimée", () => undoDeletion(key));
+    // The goal message does not claim success: the DELETE runs only when the delay ends
+    showToastWithUndo(type === "goal" ? "Objectif en cours de suppression" : "Opération supprimée", () => undoDeletion(key));
   }
 
   function undoDeletion(key: number) {
@@ -728,16 +772,17 @@ export default function Dashboard() {
   }
 
   // Every transition that would drop an unsaved draft goes through here (a save in progress blocks it)
-  function editTransition(): TransitionDecision {
+  function editTransition(scope: "all" | "ops" = "all"): TransitionDecision {
+    const { opsDirty, goalDirty: goalDraftDirty } = editGuardRef.current;
     return requestEditTransition(
-      { dirty: editGuardRef.current.dirty, saving: editGuard.isSaving() },
+      { dirty: scope === "ops" ? opsDirty : opsDirty || goalDraftDirty, saving: editGuard.isSaving() },
       () => window.confirm(EDIT_DISCARD_MESSAGE)
     );
   }
 
   // Filter changes (chart click, chip, empty state) end the edit, as they may hide the edited row
   function changeFilter(next: CategoryFilter | null, message?: string, fallbackId?: string) {
-    if (editTransition() === "blocked") return;
+    if (editTransition("ops") === "blocked") return;
     setEditing(null);
     setActiveFilter(next);
     if (fallbackId) focusFallbackRef.current = fallbackId;
@@ -749,6 +794,7 @@ export default function Dashboard() {
     if (editing?.key === key) return;
     if (navigatingRef.current || editGuard.isSaving()) return;
     if (editTransition() === "blocked") return;
+    setGoalEditing(null);
     const baseline = baselineFromRow(kind, row);
     setEditing({
       kind,
@@ -818,6 +864,69 @@ export default function Dashboard() {
 
   // Same blocking conditions as requestMonthChange: a month change, a save or a deletion finalization in progress
   const monthNavDisabled = navigating || editSaving;
+
+  // Current amount of a goal: replaces the amount, never adds to it. Same guards as the operation edit.
+  function beginGoalEdit(goal: { id: number; currentAmount: number }) {
+    if (goalEditing?.id === goal.id) return;
+    if (navigatingRef.current || editGuard.isSaving()) return;
+    if (editTransition() === "blocked") return;
+    setEditing(null);
+    setGoalEditing({
+      id: goal.id,
+      key: `goal-${goal.id}`,
+      baseline: goal.currentAmount,
+      draft: String(goal.currentAmount),
+      error: null,
+      saveError: null,
+    });
+  }
+
+  function cancelGoalEdit() {
+    if (!goalEditing) return;
+    if (editTransition() === "blocked") return;
+    pendingEditFocusRef.current = goalEditing.key;
+    setGoalEditing(null);
+  }
+
+  function changeGoalDraft(value: string) {
+    setGoalEditing((prev) => (prev ? { ...prev, draft: value } : prev));
+  }
+
+  async function handleGoalSubmit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!goalEditing || editGuard.isSaving()) return;
+    const { id, key } = goalEditing;
+    const amount = parseCurrentAmount(goalEditing.draft);
+    if (amount === null) {
+      setGoalEditing((prev) => (prev ? { ...prev, error: GOAL_AMOUNT_INVALID, saveError: null } : prev));
+      return;
+    }
+
+    // runGuarded: a second submit, or any transition, is refused until this save ends
+    const outcome = await runGuarded(editGuard, async () => {
+      setEditSaving(true);
+      setGoalEditing((prev) => (prev ? { ...prev, error: null, saveError: null } : prev));
+      try {
+        await updateGoal(id, { currentAmount: amount });
+        return "saved" as const;
+      } catch (error) {
+        console.error("Failed to update goal", error);
+        return "failed" as const;
+      }
+    });
+    if (outcome === "skipped") return;
+    setEditSaving(false);
+
+    if (outcome === "failed") {
+      // Nothing was written: the typed amount stays in the field, with the error
+      setGoalEditing((prev) => (prev ? { ...prev, saveError: GOAL_SAVE_ERROR } : prev));
+      return;
+    }
+    // updateGoal has already reloaded the goals; the edit ends and the focus goes back to its button
+    pendingEditFocusRef.current = key;
+    setGoalEditing(null);
+    showToast("Montant de l'objectif mis à jour");
+  }
 
   // Helper function to calculate percentage safely
   const calculatePercentage = (value: number, total: number): number => {
@@ -1296,17 +1405,20 @@ export default function Dashboard() {
 
       {/* Objectifs */}
       <section style={{ marginBottom: 'var(--spacing-5)' }}>
-        <h2>Objectifs d'épargne</h2>
-        {goalsData?.goals.length === 0 ? (
-          <p style={{ color: 'var(--text-secondary)', textAlign: 'center', padding: 'var(--spacing-4)' }}>
-            Aucun objectif défini. Ajoutez votre premier objectif ci-dessous.
-          </p>
+        <h2 id={GOALS_HEADING_ID} tabIndex={-1}>Objectifs d'épargne</h2>
+        {visibleGoals.length === 0 ? (
+          goalsData.goals.length === 0 ? (
+            <p style={{ color: 'var(--text-secondary)', textAlign: 'center', padding: 'var(--spacing-4)' }}>
+              Aucun objectif défini. Ajoutez votre premier objectif ci-dessous.
+            </p>
+          ) : null
         ) : (
           <div style={{ display: "flex", gap: 'var(--spacing-3)', flexWrap: "wrap" }}>
-            {goalsData?.goals.map((goal) => {
-              const categoryName = goalsData?.categories
+            {visibleGoals.map((goal) => {
+              const categoryName = goalsData.categories
                 .find(cat => cat.id === goal.categoryId)?.name || "Sans catégorie";
-              const progressPercentage = Math.min(calculatePercentage(goal.currentAmount, goal.targetAmount), 100);
+              const { percent: progressPercentage } = goalProgress(goal.currentAmount, goal.targetAmount);
+              const editor = goalEditing?.id === goal.id ? goalEditing : null;
 
               return (
                 <div key={goal.id} style={{
@@ -1344,6 +1456,42 @@ export default function Dashboard() {
                     <p style={{ fontSize: 'var(--text-xs)', color: 'var(--text-secondary)', marginTop: 'var(--spacing-1)' }}>
                       Objectif pour le {new Date(goal.targetDate).toLocaleDateString('fr-FR', { month: 'short', day: 'numeric' })}
                     </p>
+                  )}
+                  {editor ? (
+                    <GoalAmountForm
+                      goalId={goal.id}
+                      goalLabel={goal.label}
+                      draft={editor.draft}
+                      error={editor.error}
+                      saveError={editor.saveError}
+                      saving={editSaving}
+                      onChange={changeGoalDraft}
+                      onSubmit={handleGoalSubmit}
+                      onCancel={cancelGoalEdit}
+                    />
+                  ) : (
+                    <div className="ops-actions" style={{ marginTop: 'var(--spacing-2)' }}>
+                      <button
+                        id={editButtonId(`goal-${goal.id}`)}
+                        type="button"
+                        className="ops-edit"
+                        onClick={() => beginGoalEdit(goal)}
+                        disabled={navigating || editSaving}
+                        aria-label={`Modifier le montant courant de l'objectif : ${goal.label}`}
+                      >
+                        Modifier le montant
+                      </button>
+                      <button
+                        type="button"
+                        className="ops-delete"
+                        onClick={() => deleteWithUndo(goal.id, "goal")}
+                        disabled={navigating || editSaving}
+                        aria-label={`Supprimer l'objectif : ${goal.label}`}
+                        title="Supprimer"
+                      >
+                        ×
+                      </button>
+                    </div>
                   )}
                 </div>
               );
@@ -1829,7 +1977,7 @@ export default function Dashboard() {
               </select>
             </div>
             <div style={{ gridColumn: "1 / -1", display: "flex", justifyContent: "flex-end" }}>
-              <button style={btnStyle} onClick={addNewGoal}>
+              <button style={btnStyle} onClick={addNewGoal} disabled={editSaving}>
                 Ajouter l'objectif
               </button>
             </div>
