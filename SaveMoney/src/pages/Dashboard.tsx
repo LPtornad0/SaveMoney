@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type FormEvent } from "react";
+import { useEffect, useMemo, useRef, useState, type FormEvent } from "react";
 import { Bar } from "react-chartjs-2";
 import {
   Chart as ChartJS,
@@ -7,7 +7,10 @@ import {
   LinearScale,
   Tooltip,
   Legend,
+  type ChartOptions,
+  type Plugin,
 } from "chart.js";
+import { buildChartRows, filterByCategory, isSameFilter, type CategoryFilter } from "../utils/chartRows";
 import { getDb } from "../db/client";
 import { useMonthlyBudget } from "../hooks/useMonthlyBudget";
 import { useGoals } from "../hooks/useGoals";
@@ -20,6 +23,30 @@ import { isTauri } from "@tauri-apps/api/core";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 
 ChartJS.register(BarElement, CategoryScale, LinearScale, Tooltip, Legend);
+
+// Canvas cannot read CSS variables, so the dark theme colors are set once here
+ChartJS.defaults.color = "#A1A1AA";
+ChartJS.defaults.borderColor = "#2A2A2D";
+
+// Prints each bar's amount just above it
+const barValueLabels: Plugin<"bar"> = {
+  id: "barValueLabels",
+  afterDatasetsDraw(chart) {
+    const { ctx } = chart;
+    ctx.save();
+    ctx.fillStyle = "#FFFFFF";
+    ctx.font = "600 12px Inter, system-ui, sans-serif";
+    ctx.textAlign = "center";
+    ctx.textBaseline = "bottom";
+    chart.data.datasets.forEach((dataset, datasetIndex) => {
+      chart.getDatasetMeta(datasetIndex).data.forEach((bar, index) => {
+        ctx.fillText(formatEUR(Number(dataset.data[index])), bar.x, bar.y - 4);
+      });
+    });
+    ctx.restore();
+  },
+};
+ChartJS.register(barValueLabels);
 
 function currentMonth(): string {
   return new Date().toISOString().slice(0, 7); // "2026-08"
@@ -143,7 +170,11 @@ export default function Dashboard() {
   const [pendingDeletions, setPendingDeletions] = useState<PendingDeletion[]>([]);
 
   // Active category filter (from chart click)
-  const [activeFilterCategory, setActiveFilterCategory] = useState<string | null>(null);
+  // Active filter from a chart click: null (no filter), a category, or entries without a category
+  const [activeFilter, setActiveFilter] = useState<CategoryFilter | null>(null);
+
+  // Chart rows: expense categories without savings, largest amount first, empty ones hidden
+  const chartRows = useMemo(() => (data ? buildChartRows(data) : []), [data]);
 
   // Save state: the ref blocks a second submit before React re-renders
   const savingRef = useRef(false);
@@ -284,26 +315,9 @@ export default function Dashboard() {
   const expenseCategories = data.categories.filter((c) => c.type === "expense");
 
   // Filter data based on active category filter
-  const filteredIncomes = activeFilterCategory
-    ? data.incomes.filter(income => {
-        const category = data.categories.find(cat => cat.id === income.category_id);
-        return category && category.name === activeFilterCategory;
-      })
-    : data.incomes;
-
-  const filteredExpenses = activeFilterCategory
-    ? data.expenses.filter(expense => {
-        const category = data.categories.find(cat => cat.id === expense.category_id);
-        return category && category.name === activeFilterCategory;
-      })
-    : data.expenses;
-
-  const filteredRecurringExpenses = activeFilterCategory
-    ? data.recurringExpenses.filter(recurring => {
-        const category = data.categories.find(cat => cat.id === recurring.category_id);
-        return category && category.name === activeFilterCategory;
-      })
-    : data.recurringExpenses;
+  const filteredIncomes = filterByCategory(data.incomes, activeFilter, data.categories);
+  const filteredExpenses = filterByCategory(data.expenses, activeFilter, data.categories);
+  const filteredRecurringExpenses = filterByCategory(data.recurringExpenses, activeFilter, data.categories);
 
   // Runs one save at a time; a second submit while saving is ignored.
   async function runSave(form: FormKind, save: () => Promise<void>): Promise<boolean> {
@@ -523,6 +537,8 @@ export default function Dashboard() {
       const failed = await finalizePendingDeletions();
       if (failed > 0) return "failed";
       setMonth(target);
+      // The filter belongs to the month shown; it is cleared only when the month really changed
+      setActiveFilter(null);
       return "changed";
     } finally {
       navigatingRef.current = false;
@@ -555,14 +571,6 @@ export default function Dashboard() {
     showToast(message, "success", { label: "Annuler", run: undoAction }, 5000);
   }
 
-  // Helper function to identify savings categories (same as in hook)
-  const isSavingsCategory = (categoryName: string) => {
-    if (!categoryName) return false;
-    const lowerName = categoryName.toLowerCase();
-    return lowerName.includes('épargne') ||
-           lowerName.includes('savings');
-  };
-
   // Helper function to calculate percentage safely
   const calculatePercentage = (value: number, total: number): number => {
     return total > 0 ? (value / total) * 100 : 0;
@@ -586,28 +594,58 @@ export default function Dashboard() {
     return value >= 0 ? 'var(--color-income)' : 'var(--color-expense)';
   };
 
-  const expensePerCategory = expenseCategories
-    .filter(cat => !isSavingsCategory(cat.name)) // Filter out savings categories
-    .map((cat) => {
-      const fromExpenses = data.expenses
-        .filter((e) => e.category_id === cat.id)
-        .reduce((sum, e) => sum + e.amount, 0);
-      const fromRecurring = data.recurringExpenses
-        .filter((r) => r.category_id === cat.id)
-        .reduce((sum, r) => sum + r.amount, 0);
-      return { label: cat.name, total: fromExpenses + fromRecurring };
-    });
-
   const chartData = {
-    labels: expensePerCategory.map((e) => e.label),
+    labels: chartRows.map((row) => row.label),
     datasets: [
       {
-        label: "Dépenses hors épargne par catégorie (€)",
-        data: expensePerCategory.map((e) => e.total),
-        backgroundColor: "rgba(54, 162, 235, 0.7)",
+        label: "Dépenses et charges fixes (€)",
+        data: chartRows.map((row) => row.total),
+        backgroundColor: "#EF4444",
+        borderRadius: 4,
       },
     ],
   };
+
+  const chartOptions: ChartOptions<"bar"> = {
+    layout: { padding: { top: 24 } },
+    plugins: {
+      legend: { display: false },
+      tooltip: {
+        backgroundColor: "#1A1A1C",
+        borderColor: "#2A2A2D",
+        borderWidth: 1,
+        titleColor: "#FFFFFF",
+        bodyColor: "#FFFFFF",
+        callbacks: {
+          label: (context) => formatEUR(Number(context.parsed.y)),
+        },
+      },
+    },
+    scales: {
+      x: { grid: { display: false } },
+      y: {
+        beginAtZero: true,
+        grid: { color: "#2A2A2D" },
+        ticks: { callback: (value) => formatEUR(Number(value)) },
+      },
+    },
+    onClick: (_event, elements) => {
+      if (elements.length === 0) return;
+      // Each row carries its own filter, so the sorted bar and the filtered entries always match
+      const row = chartRows[elements[0].index];
+      if (!row) return;
+      const isSame = isSameFilter(activeFilter, row.filter);
+      setActiveFilter(isSame ? null : row.filter);
+      showToast(isSame ? "Filtre supprimé" : `Filtre appliqué : ${row.label}`);
+    },
+  };
+
+  const activeFilterLabel =
+    activeFilter === null
+      ? ""
+      : activeFilter.kind === "uncategorized"
+        ? "Sans catégorie"
+        : data.categories.find((cat) => cat.id === activeFilter.categoryId)?.name ?? "Catégorie";
 
   const cardStyle: React.CSSProperties = {
     background: 'var(--surface-card)',
@@ -1056,27 +1094,16 @@ export default function Dashboard() {
 
       {/* Graphique */}
       <section style={{ maxWidth: 700, marginBottom: 'var(--spacing-5)' }}>
-        <h2>Dépenses par catégorie</h2>
-        <Bar
-          data={chartData}
-          options={{
-            onClick: (_event, elements, chart) => {
-              if (elements.length > 0) {
-                const activePoint = elements[0];
-                const label = chart.data.labels?.[activePoint.index];
-                if (typeof label !== "string") return;
-
-                // Set the active filter to the clicked category
-                setActiveFilterCategory(label);
-
-                // Optional: Show visual feedback that filter is active
-                showToast(`Filtre appliqué : ${label}`);
-              }
-            }
-          }}
-        />
+        <h2>Dépenses et charges fixes par catégorie — hors épargne</h2>
+        {chartRows.length === 0 ? (
+          <p style={{ color: 'var(--text-secondary)' }}>
+            Aucune dépense ni charge fixe catégorisée pour ce mois.
+          </p>
+        ) : (
+          <Bar data={chartData} options={chartOptions} />
+        )}
         {/* Show active filter if any */}
-        {activeFilterCategory && (
+        {activeFilter !== null && (
           <div style={{
             display: 'flex',
             alignItems: 'center',
@@ -1095,11 +1122,11 @@ export default function Dashboard() {
               borderRadius: 'var(--radius-sm)',
               fontWeight: 500
             }}>
-              {activeFilterCategory}
+              {activeFilterLabel}
             </span>
             <button
               onClick={() => {
-                setActiveFilterCategory(null);
+                setActiveFilter(null);
                 showToast("Filtre supprimé");
               }}
               aria-label="Supprimer le filtre"
