@@ -142,16 +142,26 @@ Limites conservées :
 
 ## Phase 7 : Navigation et accessibilité
 
-**Statut : non commencée.** Les `aria-label` des boutons de suppression et de modification et les libellés des formulaires sont déjà en place ; le reste de la phase n'est pas commencé.
+**Statut : réalisée, retour manuel positif dans Tauri** (commit de phase 7, voir `git log`). Ce statut ne vaut **pas** audit d'accessibilité : ni Lighthouse, ni axe n'ont été exécutés, et les contrastes sont calculés à partir des couleurs déclarées dans le code, non mesurés sur le rendu.
 
-Restant à faire :
-- Remplacer ou compléter le `input type="month"` par des flèches ‹ › : état `month` au format `-MM-YYYY` et helper `addMonths`.
-- États `:hover`, `:focus-visible`, `:disabled` sur tous les éléments interactifs.
-- Navigation clavier complète, ordre de tabulation cohérent.
-- Ne pas porter le sens par la couleur seule : déjà traité pour les types d'opérations (libellé texte), à vérifier partout.
-- Audit de contraste (Lighthouse ou axe) et correction des écarts.
+Réalisé :
+- Flèches ‹ › de mois autour du sélecteur, de vrais boutons avec `aria-label`. Format `YYYY-MM` conservé. Elles passent par `requestMonthChange` et sont désactivées pendant une finalisation de suppression et pendant un enregistrement d'édition. Passages décembre/janvier couverts par `verify-month-navigation.mjs`.
+- Sélecteur clavier « Filtrer la liste par catégorie », sous le titre du graphique. Il partage l'état et les gardes du clic sur une barre (`changeFilter`) : confirmation avant abandon, blocage pendant un enregistrement, réinitialisation après un changement de mois réussi. Une catégorie absente du graphique reste affichée, avec « (absente du graphique) », et peut être retirée. Options et correspondance couvertes par `verify-category-filter.mjs`.
+- Contour de focus renforcé sur les boutons, champs et sélecteurs. Focus de repli vers le titre de liste après une suppression ou un retrait de filtre, seulement si le focus était tombé sur le corps de page. Focus sur le premier champ en erreur dans l'édition, et sur Enregistrer après un échec de sauvegarde.
+- Contrastes : textes posés sur les couleurs pleines passés à la couleur sombre `--on-color`. Mesures avant correction : blanc sur fonds colorés entre 2,15:1 et 3,76:1. Après correction, mesures calculées : entre 5,09:1 et 8,92:1. Survols, pastilles et toasts inclus dans `verify-contrast.mjs`.
 
----
+Vérifications automatisées : onze scripts (`verify-summary`, `verify-form-rules`, `verify-deferred-deletions`, `verify-close-gate`, `verify-chart-rows`, `verify-operations`, `verify-month-load`, `verify-inline-edit`, `verify-month-navigation`, `verify-category-filter`, `verify-contrast`) passent ; `npx tsc --noEmit` et `npm run build` passent.
+
+Tests manuels dans Tauri : retour utilisateur positif sur le périmètre de la checklist de phase 7.
+
+Limites conservées :
+- Pas d'audit Lighthouse ni axe. Pas de contrôle de rendu à l'écran des contrastes.
+- Styles natifs des `select` et des champs date/mois, placeholders (aucune couleur définie dans le projet) et états désactivés (opacité) : non mesurés comme contrastes.
+- Le câblage React (sélecteur, flèches, focus, gardes) n'est pas couvert par les tests automatisés ; il repose sur les tests manuels.
+- Ordre de tabulation : retour manuel uniquement, sans audit complet.
+- Touche Échap non gérée pour annuler une édition.
+- Formulaires Objectifs et Dettes : non refondus, libellés non reliés aux champs (hors périmètre).
+- Démontage temporaire du formulaire pendant un rechargement : non corrigé, à traiter séparément.
 
 ## Phase 8 : Évolutions fonctionnelles (optionnelles, une par une, sur validation)
 
@@ -182,7 +192,7 @@ Restant à faire :
 | 4 | `feat(ui): graphique pleine largeur et listes d'opérations côte à côte` | `9dc0948` |
 | 5 | `feat(ui): formulaires avec labels, validation et feedback` | `bc839ac` |
 | 6 | `fix(ui)`, `fix(budget)` : suppression différée, finalisation avant navigation et fermeture | `e9ac9f8`, `8a7dde4`, `119a4e5` |
-| 7 | `feat(a11y): navigation de mois, focus, contrastes` | Non commencé |
+| 7 | `feat(a11y): navigation de mois, sélecteur clavier, focus et contrastes` | Voir `git log` (commit de phase 7) |
 | 8 | un commit par fonctionnalité | Non commencé |
 
 Commits hors plan : `ca711ec` (premier commit de la phase 5, antérieur au périmètre validé, remplacé par `bc839ac`) ; `6e11674` (corrections de calcul mensuel, types des hooks et compilation) ; `2432581` (watcher Vite).

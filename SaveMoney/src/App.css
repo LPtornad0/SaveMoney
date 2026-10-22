@@ -15,6 +15,11 @@
   --color-available: #22C55E;
   --color-savings: #14B8A6;
 
+  /* Texte posé sur une couleur sémantique pleine (boutons, badges, cartes) : contraste mesuré dans verify-contrast.mjs */
+  --on-color: #0F0F10;
+  /* Bordure des champs : 3:1 minimum sur la carte */
+  --control-border: #71717A;
+
   /* Échelle d'espacements */
   --spacing-0: 0px;
   --spacing-1: 4px;
@@ -73,6 +78,8 @@ body {
     --color-recurring: #F59E0B;
     --color-available: #22C55E;
     --color-savings: #14B8A6;
+    --on-color: #0F0F10;
+    --control-border: #71717A;
   }
 }
 
@@ -166,6 +173,16 @@ button {
   margin-right: var(--spacing-1);
 }
 
+/* Focus visible sur tous les éléments interactifs. Plus spécifique que « input, button { outline: none } ». */
+button:focus-visible,
+input:focus-visible,
+select:focus-visible,
+textarea:focus-visible,
+a:focus-visible {
+  outline: 2px solid var(--color-income);
+  outline-offset: 2px;
+}
+
 /* Styles pour le mode sombre si nécessaire */
 @media (prefers-color-scheme: dark) {
   input,
@@ -215,8 +232,12 @@ button {
   border: none;
   border-radius: var(--radius-md);
   background: var(--color-income);
-  color: var(--text-primary);
+  color: var(--on-color);
   cursor: pointer;
+}
+
+.btn-primary:hover:not(:disabled) {
+  filter: brightness(1.08);
 }
 
 .btn-primary:disabled {
@@ -231,7 +252,7 @@ button {
   font: inherit;
   padding: var(--spacing-2);
   border-radius: var(--radius-md);
-  border: 1px solid var(--surface-border);
+  border: 1px solid var(--control-border);
   background: var(--surface-card);
   color: var(--text-primary);
 }
@@ -264,7 +285,7 @@ button {
   gap: var(--spacing-2);
   padding: var(--spacing-2) var(--spacing-3);
   border-radius: var(--radius-md);
-  color: #FFFFFF;
+  color: var(--on-color);
   background: var(--color-income);
   box-shadow: 0 4px 6px rgba(0, 0, 0, 0.3);
 }
@@ -277,7 +298,7 @@ button {
   margin-left: auto;
   background: none;
   border: none;
-  color: #FFFFFF;
+  color: var(--on-color);
   font: inherit;
   font-weight: 600;
   text-decoration: underline;
@@ -363,7 +384,7 @@ button {
   font-weight: 600;
   padding: 2px var(--spacing-2);
   border-radius: var(--radius-sm);
-  color: #FFFFFF;
+  color: var(--on-color);
 }
 
 .ops-kind-income {
@@ -413,8 +434,8 @@ button {
 }
 
 .ops-delete:hover:not(:disabled) {
-  color: var(--color-expense);
-  background: rgba(239, 68, 68, 0.12);
+  color: var(--on-color);
+  background: var(--color-expense);
 }
 
 .ops-delete:focus-visible,
@@ -555,4 +576,68 @@ button {
   .ops-pair {
     grid-template-columns: minmax(0, 1fr);
   }
+}
+
+/* Navigation entre les mois : boutons ‹ › autour du sélecteur */
+.month-nav {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--spacing-2);
+  margin-bottom: var(--spacing-4);
+}
+
+.month-nav-btn {
+  width: 36px;
+  height: 36px;
+  padding: 0;
+  border: 1px solid var(--control-border);
+  border-radius: var(--radius-md);
+  background: var(--surface-card);
+  color: var(--text-primary);
+  font-size: var(--text-lg);
+  line-height: 1;
+  cursor: pointer;
+}
+
+.month-nav-btn:hover:not(:disabled) {
+  border-color: var(--text-secondary);
+}
+
+.month-nav-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+/* Bouton × de la puce de filtre actif */
+.filter-remove {
+  background: none;
+  border: none;
+  color: var(--text-secondary);
+  cursor: pointer;
+  padding: var(--spacing-1);
+  font-size: var(--text-xs);
+}
+
+.filter-remove:hover:not(:disabled) {
+  color: var(--text-primary);
+}
+
+/* Sélecteur clavier de catégorie, sous le titre du graphique */
+.chart-filter {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--spacing-2);
+  margin-bottom: var(--spacing-3);
+}
+
+.chart-filter label {
+  font-size: var(--text-sm);
+  color: var(--text-secondary);
+}
+
+.chart-filter .form-input {
+  width: auto;
+  min-width: 14rem;
 }

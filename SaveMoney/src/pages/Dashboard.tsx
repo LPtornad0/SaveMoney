@@ -11,6 +11,7 @@ import {
   type Plugin,
 } from "chart.js";
 import { buildChartRows, filterByCategory, isSameFilter, type CategoryFilter } from "../utils/chartRows";
+import { buildFilterOptions, filterLabel, filterToValue, valueToFilter } from "../utils/categoryFilterOptions";
 import { buildOperations, formatShortDate, sortRecurring } from "../utils/operations";
 import { getDb } from "../db/client";
 import { useMonthlyBudget } from "../hooks/useMonthlyBudget";
@@ -52,6 +53,7 @@ import {
   type TransitionDecision,
 } from "../utils/inlineEdit";
 import { categoryDotColor } from "../utils/categoryColor";
+import { addMonths } from "../utils/monthNavigation";
 import { OperationEditForm, type CategoryOption } from "../components/OperationEditForm";
 import { isTauri } from "@tauri-apps/api/core";
 import { getCurrentWindow } from "@tauri-apps/api/window";
@@ -242,6 +244,8 @@ export default function Dashboard() {
   });
   // Focus target after a save or a cancel: the row's edit button, or the list heading if the row is gone
   const pendingEditFocusRef = useRef<string | null>(null);
+  // Heading to focus when the button the user just used disappears (deletion, filter removal)
+  const focusFallbackRef = useRef<string | null>(null);
 
   // Chart rows: expense categories without savings, largest amount first, empty ones hidden
   const chartRows = useMemo(() => (data ? buildChartRows(data) : []), [data]);
@@ -296,6 +300,15 @@ export default function Dashboard() {
     target?.focus();
     pendingEditFocusRef.current = null;
   }, [editing, loading, data]);
+
+  // Focus is moved only when it was lost (on the body): a focus the user placed elsewhere is never taken away.
+  useEffect(() => {
+    const fallbackId = focusFallbackRef.current;
+    if (fallbackId === null) return;
+    focusFallbackRef.current = null;
+    if (document.activeElement && document.activeElement !== document.body) return;
+    document.getElementById(fallbackId)?.focus();
+  }, [pendingDeletions, activeFilter]);
 
   // The edited row can only disappear through a reload. Its draft is then dropped with a message, not kept silently.
   useEffect(() => {
@@ -671,6 +684,12 @@ export default function Dashboard() {
     }
   }
 
+  // Arrows use the same entry point as the selector, so every protection of requestMonthChange applies
+  async function stepMonth(delta: number) {
+    const target = addMonths(month, delta);
+    if (target !== null) await handleMonthInput(target);
+  }
+
   async function handleMonthInput(target: string) {
     const status = await requestMonthChange(target);
     if (status === "failed") showToast(MONTH_CHANGE_FAILED_MESSAGE, "error");
@@ -679,6 +698,7 @@ export default function Dashboard() {
   // Delete with undo: the row is hidden at once, the DELETE runs after 5 seconds unless undone
   function deleteWithUndo(id: number, type: DeletableType) {
     if (navigatingRef.current || editGuard.isSaving()) return;
+    focusFallbackRef.current = type === "recurring" ? CHARGES_HEADING_ID : OPERATIONS_HEADING_ID;
     const key = deletionQueue.schedule(id, type);
     showToastWithUndo("Opération supprimée", () => undoDeletion(key));
   }
@@ -696,6 +716,17 @@ export default function Dashboard() {
     showToast(message, "success", { label: "Annuler", run: undoAction }, 5000);
   }
 
+  // Keyboard alternative to the chart click: same state, and the same guards through changeFilter
+  function selectFilter(value: string) {
+    if (!data) return;
+    const next = valueToFilter(value);
+    if (next === undefined) return;
+    const unchanged =
+      next === null ? activeFilter === null : activeFilter !== null && isSameFilter(activeFilter, next);
+    if (unchanged) return;
+    changeFilter(next, next === null ? "Filtre supprimé" : `Filtre appliqué : ${filterLabel(next, data.categories)}`);
+  }
+
   // Every transition that would drop an unsaved draft goes through here (a save in progress blocks it)
   function editTransition(): TransitionDecision {
     return requestEditTransition(
@@ -705,10 +736,11 @@ export default function Dashboard() {
   }
 
   // Filter changes (chart click, chip, empty state) end the edit, as they may hide the edited row
-  function changeFilter(next: CategoryFilter | null, message?: string) {
+  function changeFilter(next: CategoryFilter | null, message?: string, fallbackId?: string) {
     if (editTransition() === "blocked") return;
     setEditing(null);
     setActiveFilter(next);
+    if (fallbackId) focusFallbackRef.current = fallbackId;
     if (message) showToast(message);
   }
 
@@ -784,6 +816,9 @@ export default function Dashboard() {
     refresh();
   }
 
+  // Same blocking conditions as requestMonthChange: a month change, a save or a deletion finalization in progress
+  const monthNavDisabled = navigating || editSaving;
+
   // Helper function to calculate percentage safely
   const calculatePercentage = (value: number, total: number): number => {
     return total > 0 ? (value / total) * 100 : 0;
@@ -801,11 +836,6 @@ export default function Dashboard() {
     return `${sign}${formatEUR(value)}`;
   };
 
-  // Helper function to get variation color (green for positive, red for negative)
-  const getVariationColor = (value: number | undefined): string => {
-    if (value === undefined) return 'var(--text-secondary)';
-    return value >= 0 ? 'var(--color-income)' : 'var(--color-expense)';
-  };
 
   const chartData = {
     labels: chartRows.map((row) => row.label),
@@ -854,12 +884,7 @@ export default function Dashboard() {
     },
   };
 
-  const activeFilterLabel =
-    activeFilter === null
-      ? ""
-      : activeFilter.kind === "uncategorized"
-        ? "Sans catégorie"
-        : data.categories.find((cat) => cat.id === activeFilter.categoryId)?.name ?? "Catégorie";
+  const activeFilterLabel = activeFilter === null ? "" : filterLabel(activeFilter, data.categories);
 
   const cardStyle: React.CSSProperties = {
     background: 'var(--surface-card)',
@@ -872,7 +897,7 @@ export default function Dashboard() {
   const inputStyle: React.CSSProperties = {
     padding: 'var(--spacing-2)',
     borderRadius: 'var(--radius-md)',
-    border: '1px solid var(--surface-border)',
+    border: '1px solid var(--control-border)',
     background: 'var(--surface-card)',
     color: 'var(--text-primary)',
     marginRight: 'var(--spacing-2)',
@@ -883,7 +908,7 @@ export default function Dashboard() {
     borderRadius: 'var(--radius-md)',
     border: 'none',
     background: 'var(--color-income)',
-    color: 'var(--text-primary)',
+    color: 'var(--on-color)',
     cursor: 'pointer',
   };
 
@@ -897,20 +922,42 @@ export default function Dashboard() {
     }}>
       <h1>SaveMoney</h1>
 
-      <div style={{ marginBottom: 'var(--spacing-4)' }}>
-        <label>Mois : </label>
+      <div className="month-nav">
+        <label htmlFor="month-input">Mois :</label>
+        <button
+          type="button"
+          className="month-nav-btn"
+          aria-label="Mois précédent"
+          title="Mois précédent"
+          disabled={monthNavDisabled}
+          onClick={() => stepMonth(-1)}
+        >
+          ‹
+        </button>
         <input
+          id="month-input"
           type="month"
           value={month}
-          disabled={navigating}
+          disabled={monthNavDisabled}
           onChange={(e) => void handleMonthInput(e.target.value)}
           style={inputStyle}
         />
+        <button
+          type="button"
+          className="month-nav-btn"
+          aria-label="Mois suivant"
+          title="Mois suivant"
+          disabled={monthNavDisabled}
+          onClick={() => stepMonth(1)}
+        >
+          ›
+        </button>
+        <span className="month-nav-label">{formatMonthLabel(month)}</span>
       </div>
 
       {/* Blocs résumé */}
       <section style={{ display: "flex", flexWrap: "wrap", gap: 'var(--spacing-3)', marginBottom: 'var(--spacing-5)' }}>
-        <div style={{ ...cardStyle, background: 'var(--color-available)' }}>
+        <div style={{ ...cardStyle, color: 'var(--on-color)', background: 'var(--color-available)' }}>
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--spacing-1)' }}>
             <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
@@ -923,7 +970,7 @@ export default function Dashboard() {
               style={{
                 cursor: 'help',
                 fontSize: 'var(--text-sm)',
-                color: 'var(--text-secondary)',
+                color: 'inherit',
                 marginLeft: 'var(--spacing-1)'
               }}
             >
@@ -934,17 +981,16 @@ export default function Dashboard() {
           {data.variationAvailable !== undefined && (
             <p style={{
               fontSize: 'var(--text-lg)',
-              color: getVariationColor(data.variationAvailable),
               margin: 'var(--spacing-1) 0'
             }}>
               {formatVariation(data.variationAvailable)} vs mois précédent
             </p>
           )}
-          <p style={{ fontSize: 'var(--text-sm)', color: 'var(--text-secondary)' }}>
+          <p style={{ fontSize: 'var(--text-sm)', color: 'inherit' }}>
             {calculatePercentage(data.available, data.totalIncome).toFixed(0)}% du revenu
           </p>
         </div>
-        <div style={{ ...cardStyle, background: 'var(--color-income)' }}>
+        <div style={{ ...cardStyle, color: 'var(--on-color)', background: 'var(--color-income)' }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--spacing-1)' }}>
             <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
               <path d="M12 22c1.1 0 2-.9 2-2h-4c0 1.1.9 2 2 2zm6-6v-5c0-3.07-1.64-5.64-4.5-6.32V4c0-.83-.67-1.5-1.5-1.5h-9c-.83 0-1.5.67-1.5 1.5v3.68C7.64 5.36 6 7.92 6 11v5l-2 2v1h16v-1l-2-2zm-6 9H4v-2h4v2z"/>
@@ -955,17 +1001,16 @@ export default function Dashboard() {
           {data.variationIncome !== undefined && (
             <p style={{
               fontSize: 'var(--text-lg)',
-              color: getVariationColor(data.variationIncome),
               margin: 'var(--spacing-1) 0'
             }}>
               {formatVariation(data.variationIncome)} vs mois précédent
             </p>
           )}
-          <p style={{ fontSize: 'var(--text-sm)', color: 'var(--text-secondary)' }}>
+          <p style={{ fontSize: 'var(--text-sm)', color: 'inherit' }}>
             100% du revenu
           </p>
         </div>
-        <div style={{ ...cardStyle, background: 'var(--color-expense)' }}>
+        <div style={{ ...cardStyle, color: 'var(--on-color)', background: 'var(--color-expense)' }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--spacing-1)' }}>
             <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
               <path d="M19 13H5v-2h14v2zm0-4H5V9h14v2zm0-4H5V5h14v2z"/>
@@ -976,17 +1021,16 @@ export default function Dashboard() {
           {data.variationExpense !== undefined && (
             <p style={{
               fontSize: 'var(--text-lg)',
-              color: getVariationColor(data.variationExpense),
               margin: 'var(--spacing-1) 0'
             }}>
               {formatVariation(data.variationExpense)} vs mois précédent
             </p>
           )}
-          <p style={{ fontSize: 'var(--text-sm)', color: 'var(--text-secondary)' }}>
+          <p style={{ fontSize: 'var(--text-sm)', color: 'inherit' }}>
             {calculatePercentage(data.totalExpense, data.totalIncome).toFixed(0)}% du revenu
           </p>
         </div>
-        <div style={{ ...cardStyle, background: 'var(--color-recurring)' }}>
+        <div style={{ ...cardStyle, color: 'var(--on-color)', background: 'var(--color-recurring)' }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--spacing-1)' }}>
             <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
               <path d="M12 4a8 8 0 0 1 8 8c0 3.59-2.56 6.5-6 7.66V20H4v-3.34C2.56 14.5 0 11.59 0 8a8 8 0 0 1 8-8zm0 14c-3.31 0-6-2.69-6-6h12c0 3.31-2.69 6-6 6z"/>
@@ -997,17 +1041,16 @@ export default function Dashboard() {
           {data.variationRecurring !== undefined && (
             <p style={{
               fontSize: 'var(--text-lg)',
-              color: getVariationColor(data.variationRecurring),
               margin: 'var(--spacing-1) 0'
             }}>
               {formatVariation(data.variationRecurring)} vs mois précédent
             </p>
           )}
-          <p style={{ fontSize: 'var(--text-sm)', color: 'var(--text-secondary)' }}>
+          <p style={{ fontSize: 'var(--text-sm)', color: 'inherit' }}>
             {calculatePercentage(data.totalRecurring, data.totalIncome).toFixed(0)}% du revenu
           </p>
         </div>
-        <div style={{ ...cardStyle, background: 'var(--color-savings)' }}>
+        <div style={{ ...cardStyle, color: 'var(--on-color)', background: 'var(--color-savings)' }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--spacing-1)' }}>
             <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
               <path d="M20 12a8 8 0 0 0-16 0H4a4 4 0 0 0 0 8h16a4 4 0 0 0 0-8h-4zm0 4a2 2 0 0 1-4 0 2 2 0 0 0-4 0H8a6 6 0 0 1 12 0h-4a2 2 0 0 1-4 0z"/>
@@ -1018,13 +1061,12 @@ export default function Dashboard() {
           {data.variationSavings !== undefined && (
             <p style={{
               fontSize: 'var(--text-lg)',
-              color: getVariationColor(data.variationSavings),
               margin: 'var(--spacing-1) 0'
             }}>
               {formatVariation(data.variationSavings)} vs mois précédent
             </p>
           )}
-          <p style={{ fontSize: 'var(--text-sm)', color: 'var(--text-secondary)' }}>
+          <p style={{ fontSize: 'var(--text-sm)', color: 'inherit' }}>
             {calculatePercentage(data.totalSavings, data.totalIncome).toFixed(0)}% du revenu
           </p>
         </div>
@@ -1034,6 +1076,23 @@ export default function Dashboard() {
       {/* Graphique */}
       <section className="chart-card">
         <h2>Dépenses et charges fixes par catégorie — hors épargne</h2>
+        {(chartRows.length > 0 || activeFilter !== null) && (
+          <div className="chart-filter">
+            <label htmlFor="chart-category-select">Filtrer la liste par catégorie</label>
+            <select
+              id="chart-category-select"
+              className="form-input"
+              value={filterToValue(activeFilter)}
+              onChange={(e) => selectFilter(e.target.value)}
+            >
+              {buildFilterOptions(chartRows, activeFilter, activeFilterLabel).map((option) => (
+                <option key={option.value || "all"} value={option.value}>
+                  {option.label}
+                </option>
+              ))}
+            </select>
+          </div>
+        )}
         {chartRows.length === 0 ? (
           <p style={{ color: 'var(--text-secondary)' }}>
             Aucune dépense ni charge fixe catégorisée pour ce mois.
@@ -1058,7 +1117,7 @@ export default function Dashboard() {
             <span>Filtre actif : </span>
             <span style={{
               background: 'var(--color-income)',
-              color: 'white',
+              color: 'var(--on-color)',
               padding: 'var(--spacing-1) var(--spacing-2)',
               borderRadius: 'var(--radius-sm)',
               fontWeight: 500
@@ -1066,17 +1125,10 @@ export default function Dashboard() {
               {activeFilterLabel}
             </span>
             <button
-              onClick={() => changeFilter(null, "Filtre supprimé")}
+              onClick={() => changeFilter(null, "Filtre supprimé", OPERATIONS_HEADING_ID)}
               aria-label="Supprimer le filtre"
               title="Supprimer le filtre"
-              style={{
-                background: 'none',
-                border: 'none',
-                color: 'var(--text-secondary)',
-                cursor: 'pointer',
-                padding: 'var(--spacing-1)',
-                fontSize: 'var(--text-xs)'
-              }}
+              className="filter-remove"
             >
               ×
             </button>
@@ -1094,7 +1146,7 @@ export default function Dashboard() {
                     : "Aucune opération pour ce filtre ce mois-ci."}
                 </p>
                 {activeFilter !== null && (
-                  <button type="button" className="btn-ghost" onClick={() => changeFilter(null, "Filtre supprimé")}>
+                  <button type="button" className="btn-ghost" onClick={() => changeFilter(null, "Filtre supprimé", OPERATIONS_HEADING_ID)}>
                     Retirer le filtre
                   </button>
                 )}
@@ -1172,7 +1224,7 @@ export default function Dashboard() {
                     : "Aucune charge fixe active pour ce filtre."}
                 </p>
                 {activeFilter !== null && (
-                  <button type="button" className="btn-ghost" onClick={() => changeFilter(null, "Filtre supprimé")}>
+                  <button type="button" className="btn-ghost" onClick={() => changeFilter(null, "Filtre supprimé", CHARGES_HEADING_ID)}>
                     Retirer le filtre
                   </button>
                 )}

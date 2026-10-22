@@ -1,4 +1,4 @@
-import type { FormEvent } from "react";
+import { useEffect, useRef, type FormEvent } from "react";
 import type { EditDraft, EditErrors, EditKind } from "../utils/inlineEdit";
 
 export interface CategoryOption {
@@ -38,12 +38,30 @@ export function OperationEditForm({
   const categoryId = `${idPrefix}-category`;
   const dayId = `${idPrefix}-day`;
 
+  const labelRef = useRef<HTMLInputElement>(null);
+  const amountRef = useRef<HTMLInputElement>(null);
+  const dayRef = useRef<HTMLInputElement>(null);
+  const submitRef = useRef<HTMLButtonElement>(null);
+
+  // A rejected submit moves focus to the first field in error
+  useEffect(() => {
+    if (errors.label) labelRef.current?.focus();
+    else if (errors.amount) amountRef.current?.focus();
+    else if (errors.day) dayRef.current?.focus();
+  }, [errors]);
+
+  // A failed save keeps the form open: focus returns to the submit button, which was disabled while saving
+  useEffect(() => {
+    if (saveError) submitRef.current?.focus();
+  }, [saveError]);
+
   return (
     <form className="ops-edit-form" onSubmit={onSubmit} noValidate aria-label="Modifier l'opération">
       <div className="form-field">
         <label htmlFor={labelId}>Libellé</label>
         <input
           id={labelId}
+          ref={labelRef}
           className="form-input"
           value={draft.label}
           disabled={saving}
@@ -58,6 +76,7 @@ export function OperationEditForm({
         <label htmlFor={amountId}>Montant (€)</label>
         <input
           id={amountId}
+          ref={amountRef}
           className="form-input"
           type="number"
           step="0.01"
@@ -92,6 +111,7 @@ export function OperationEditForm({
           <label htmlFor={dayId}>Jour du mois (1 à 31)</label>
           <input
             id={dayId}
+            ref={dayRef}
             className="form-input"
             type="number"
             inputMode="numeric"
@@ -122,7 +142,7 @@ export function OperationEditForm({
         <button type="button" className="btn-ghost" onClick={onCancel} disabled={saving}>
           Annuler
         </button>
-        <button type="submit" className="btn-primary" disabled={saving}>
+        <button ref={submitRef} type="submit" className="btn-primary" disabled={saving}>
           {saving ? "Enregistrement…" : "Enregistrer"}
         </button>
       </div>
