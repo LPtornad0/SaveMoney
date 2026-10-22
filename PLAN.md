@@ -165,27 +165,34 @@ Limites conservées :
 
 ## Phase 8 : Évolutions fonctionnelles (optionnelles, une par une, sur validation)
 
-**Statut : premier lot livré et validé par retour manuel dans Tauri** (objectifs : montant courant modifiable, suppression annulable, commit de lot, voir `git log`). **Le reste de la phase 8 n'est pas commencé.** Ce statut ne marque pas la phase 8 comme terminée. Chaque point demande une validation préalable.
+**Statut : deux lots livrés et validés par retour manuel dans Tauri** (objectifs : montant courant modifiable et suppression annulable ; courbe d'évolution sur six mois). **Le reste de la phase 8 n'est pas commencé.** La phase 8 n'est pas marquée comme terminée. Chaque point demande une validation préalable.
 
 1. **Budgets par catégorie** avec barres de progression et alerte de dépassement (nouvelle table `budgets` → migration à valider). Non commencé.
-2. **Objectif d'épargne** : **premier lot livré** : modification du montant courant (remplacement, pas de versement additionné ; zéro et décimales acceptés ; montant réel conservé au-delà de la cible ; jauge et pourcentage plafonnés à 100 %) et suppression différée annulable pendant 5 secondes, avec les gardes existantes (brouillon modifié, sauvegarde, navigation de mois, filtre, fermeture). Restent hors lot : modification du libellé, de la cible ou de la date ; lien automatique entre objectif et épargne mensuelle.
-3. **Courbe d'évolution** revenus/dépenses sur plusieurs mois (Chart.js `Line`). Non commencé.
+2. **Objectif d'épargne** : **premier lot livré** : modification du montant courant (remplacement, pas de versement additionné ; zéro et décimales acceptés ; montant réel conservé au-delà de la cible ; jauge et pourcentage plafonnés à 100 %) et suppression différée annulable pendant 5 secondes, avec les gardes existantes. Restent hors lot : modification du libellé, de la cible ou de la date ; lien automatique entre objectif et épargne mensuelle.
+3. **Courbe d'évolution** : **deuxième lot livré** : carte en lecture seule sous le graphique, revenus et dépenses ponctuelles sur les six mois se terminant au mois sélectionné (sans prévision). Charges fixes et épargne exclues, mention visible. Un tableau accessible reprend les valeurs. Les opérations en attente de suppression sont exclues, comme dans les listes. Un mois sans opération est distinct d'un mois contenant seulement de l'épargne ou des opérations en attente de suppression. Les totaux sont comparés uniquement sur le même périmètre, hors suppression en attente.
 4. **Export CSV** (via les commandes/plugins Tauri de fichiers, après accord sur les permissions de `capabilities/`). Non commencé.
 5. **Récurrence automatique** des charges fixes. Non commencé.
 6. **Thème clair** optionnel via `prefers-color-scheme`. Non commencé.
 
-Vérifications automatisées du premier lot : douze scripts, dont `verify-goals.mjs` (validation du montant, brouillon, plafonnement, suppression différée du type `goal`), TypeScript et build passent.
+Vérifications automatisées de la dernière exécution avant le commit du deuxième lot : treize scripts passent (`verify-summary`, `verify-form-rules`, `verify-deferred-deletions`, `verify-close-gate`, `verify-chart-rows`, `verify-operations`, `verify-month-load`, `verify-inline-edit`, `verify-month-navigation`, `verify-category-filter`, `verify-contrast`, `verify-goals`, `verify-monthly-series`) ; `npx tsc --noEmit` et `npm run build` passent.
 
-Tests manuels dans Tauri : retour utilisateur positif sur la checklist du lot.
+Tests manuels dans Tauri : retour utilisateur positif sur le deuxième lot. Ce retour ne couvre pas les scénarios non testés listés ci-dessous.
 
-Limites et scénarios non vérifiés pour ce lot :
+Limites et scénarios non vérifiés pour le deuxième lot :
+- Câblage React de la carte et du hook (rafraîchissement après création, modification, suppression et annulation) : non testé automatiquement.
+- SQL de la courbe testé avec une base factice seulement, pas sur la base réelle.
+- Erreurs de lecture réelles non simulées dans Tauri.
+- Contrastes des lignes de la courbe : mesures calculées sur les couleurs déclarées, pas sur le rendu réel. Non couverts explicitement par `verify-contrast`.
+- Écart temporaire, accepté : pendant les 5 secondes d'une suppression en attente, la courbe exclut l'opération alors que les cartes existantes l'incluent encore jusqu'à la finalisation.
+
+Limites et scénarios non vérifiés pour le premier lot (rappel) :
 - Échecs SQL non simulés (écriture du montant, suppression) : non vérifiés.
 - Blocages pendant une sauvegarde, trop rapides pour être observés : non vérifiés.
-- Câblage React (brouillon, gardes, focus, confirmation) : non testé automatiquement.
+- Câblage React des objectifs (brouillon, gardes, focus, confirmation) : non testé automatiquement.
 - Démontage temporaire de la page pendant le rechargement des objectifs après une sauvegarde : limite connue, conservée.
 
 **Hors plan, à suivre :**
-- Message « Opération supprimée » : affiché avant l'écriture effective de la suppression, dans le comportement des opérations. Correction séparée, non traitée dans le premier lot.
+- Message « Opération supprimée » : affiché avant l'écriture effective de la suppression, dans le comportement des opérations. Correction séparée, non traitée dans les lots de phase 8.
 - Formulaires Objectifs et Dettes : en lecture DOM, sans messages d'erreur reliés aux champs. La barre de dette est toujours à 100 %, faute de remboursements enregistrés. Amélioration éventuelle, distincte.
 - Chargement mensuel : corrigé (`f148113`), les réponses obsolètes sont ignorées.
 - Perte de focus et démontage temporaire du formulaire d'édition pendant un rechargement : limite connue, à évaluer.
@@ -204,7 +211,7 @@ Limites et scénarios non vérifiés pour ce lot :
 | 5 | `feat(ui): formulaires avec labels, validation et feedback` | `bc839ac` |
 | 6 | `fix(ui)`, `fix(budget)` : suppression différée, finalisation avant navigation et fermeture | `e9ac9f8`, `8a7dde4`, `119a4e5` |
 | 7 | `feat(a11y): navigation de mois, sélecteur clavier, focus et contrastes` | Voir `git log` (commit de phase 7) |
-| 8 | un commit par fonctionnalité : lot 1 objectifs (montant courant, suppression annulable) | Voir `git log` (commit du lot 1) ; reste non commencé |
+| 8 | un commit par fonctionnalité : lot 1 objectifs (montant courant, suppression annulable) ; lot 2 courbe d'évolution sur 6 mois | Voir `git log` (commits des lots 1 et 2) ; reste non commencé |
 
 Commits hors plan : `ca711ec` (premier commit de la phase 5, antérieur au périmètre validé, remplacé par `bc839ac`) ; `6e11674` (corrections de calcul mensuel, types des hooks et compilation) ; `2432581` (watcher Vite).
 

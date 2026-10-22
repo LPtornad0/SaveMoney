@@ -66,16 +66,19 @@ export function isSavingsCategory(categoryName: string): boolean {
          lowerName.includes('savings');
 }
 
+// Same rule as the monthly summary: an entry is savings when its category name says so.
+export function isSavingsEntry(entry: BudgetEntry, categories: BudgetCategory[]): boolean {
+  if (!entry.category_id) return false;
+  const categoryName = categories.find(cat => cat.id === entry.category_id)?.name || '';
+  return isSavingsCategory(categoryName);
+}
+
 /**
  * Apply the same classification to any month: savings entries are separated
  * from regular expenses and recurring expenses, then computeSummary is applied.
  */
 export function summarizeMonth(month: MonthData): ComputedSummary {
-  const isSavings = (entry: BudgetEntry): boolean => {
-    if (!entry.category_id) return false;
-    const categoryName = month.categories.find(cat => cat.id === entry.category_id)?.name || '';
-    return isSavingsCategory(categoryName);
-  };
+  const isSavings = (entry: BudgetEntry): boolean => isSavingsEntry(entry, month.categories);
   const toAmounts = (entries: BudgetEntry[]) => entries.map(entry => ({ amount: entry.amount }));
 
   return computeSummary({

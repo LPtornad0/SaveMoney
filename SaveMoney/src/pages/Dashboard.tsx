@@ -55,6 +55,9 @@ import {
 import { categoryDotColor } from "../utils/categoryColor";
 import { addMonths } from "../utils/monthNavigation";
 import { OperationEditForm, type CategoryOption } from "../components/OperationEditForm";
+import { EvolutionCard } from "../components/EvolutionCard";
+import { useMonthlySeries } from "../hooks/useMonthlySeries";
+import { buildMonthlySeries } from "../utils/monthlySeries";
 import { GoalAmountForm } from "../components/GoalAmountForm";
 import { GOAL_AMOUNT_INVALID, GOAL_SAVE_ERROR, goalProgress, isGoalDraftChanged, parseCurrentAmount } from "../utils/goalRules";
 import { isTauri } from "@tauri-apps/api/core";
@@ -189,6 +192,8 @@ function formatMonthLabel(yearMonth: string): string {
 export default function Dashboard() {
   const [month, setMonth] = useState(currentMonth());
   const { data, loading, error, refresh } = useMonthlyBudget(month);
+  // Read-only series for the evolution card; reloaded whenever the monthly data is reloaded
+  const series = useMonthlySeries(month, data);
   const { data: goalsData, loading: goalsLoading, error: goalsError, refresh: refreshGoals, addGoal, updateGoal } = useGoals();
   const { data: debtsData, loading: debtsLoading, error: debtsError, refresh: refreshDebts, addDebt } = useDebts();
 
@@ -494,6 +499,16 @@ export default function Dashboard() {
     (rec) => !isPendingDeletion(rec.id, "recurring")
   );
   const visibleGoals = goalsData.goals.filter((goal) => !isPendingDeletion(goal.id, "goal"));
+  // Operations whose deletion is pending are left out of the series, as they are left out of the lists
+  const evolutionRows =
+    series.rows === null
+      ? null
+      : buildMonthlySeries({
+          ...series.rows,
+          excluded: pendingDeletions.flatMap((item) =>
+            item.type === "income" || item.type === "expense" ? [{ id: item.id, type: item.type }] : []
+          ),
+        });
 
   // Runs one save at a time; a second submit while saving is ignored.
   async function runSave(form: FormKind, save: () => Promise<void>): Promise<boolean> {
@@ -1244,6 +1259,7 @@ export default function Dashboard() {
           </div>
         )}
       </section>
+        <EvolutionCard selectedMonth={month} rows={evolutionRows} error={series.error} />
         <div className="ops-pair">
           <section className="ops-card">
             <h2 id={OPERATIONS_HEADING_ID} tabIndex={-1}>Opérations du mois</h2>
