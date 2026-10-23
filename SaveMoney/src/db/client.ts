@@ -51,6 +51,29 @@ CREATE TABLE IF NOT EXISTS expenses (
   category_id INTEGER,
   FOREIGN KEY (category_id) REFERENCES categories(id)
 );
+
+CREATE TABLE IF NOT EXISTS goals (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  label TEXT NOT NULL,
+  target_amount REAL NOT NULL,
+  current_amount REAL NOT NULL DEFAULT 0,
+  target_date TEXT,
+  category_id INTEGER,
+  created_at TEXT NOT NULL DEFAULT (datetime('now')),
+  FOREIGN KEY (category_id) REFERENCES categories(id)
+);
+
+CREATE TABLE IF NOT EXISTS debts (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  label TEXT NOT NULL,
+  amount_owed REAL NOT NULL,
+  interest_rate REAL,
+  minimum_payment REAL,
+  due_date TEXT, -- ISO date string or day of month
+  category_id INTEGER, -- Debt category (credit card, loan, mortgage, etc.)
+  created_at TEXT NOT NULL DEFAULT (datetime('now')),
+  FOREIGN KEY (category_id) REFERENCES categories(id)
+);
 `;
 
 const DEFAULT_CATEGORIES: Array<{ name: string; type: "income" | "expense" }> = [

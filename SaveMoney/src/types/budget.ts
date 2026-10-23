@@ -33,3 +33,24 @@ export interface Expense {
   amount: number;
   category_id: number | null;
 }
+
+export interface Goal {
+  id: number;
+  label: string;
+  targetAmount: number;
+  currentAmount: number;
+  targetDate?: string;
+  categoryId?: number;
+  createdAt: string;
+}
+
+export interface Debt {
+  id: number;
+  label: string;
+  amountOwed: number;
+  interestRate?: number;
+  minimumPayment?: number;
+  dueDate?: string;
+  categoryId?: number;
+  createdAt: string;
+}

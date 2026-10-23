@@ -1,0 +1,3 @@
+# Dépendances installées : jamais suivies par git à la racine du dépôt.
+# Les manifestes (package.json) et les verrous (package-lock.json) restent suivis.
+node_modules/

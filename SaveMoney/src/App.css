@@ -1,19 +1,52 @@
-.logo.vite:hover {
-  filter: drop-shadow(0 0 2em #747bff);
-}
-
-.logo.react:hover {
-  filter: drop-shadow(0 0 2em #61dafb);
-}
 :root {
-  font-family: Inter, Avenir, Helvetica, Arial, sans-serif;
-  font-size: 16px;
-  line-height: 24px;
-  font-weight: 400;
+  /* Surfaces */
+  --surface-background: #0F0F10;
+  --surface-card: #1A1A1C;
+  --surface-border: #2A2A2D;
 
-  color: #0f0f0f;
-  background-color: #f6f6f6;
+  /* Texte */
+  --text-primary: #FFFFFF;
+  --text-secondary: #A1A1AA;
 
+  /* Couleurs sémantiques */
+  --color-income: #3B82F6;
+  --color-expense: #EF4444;
+  --color-recurring: #F59E0B;
+  --color-available: #22C55E;
+  --color-savings: #14B8A6;
+
+  /* Texte posé sur une couleur sémantique pleine (boutons, badges, cartes) : contraste mesuré dans verify-contrast.mjs */
+  --on-color: #0F0F10;
+  /* Bordure des champs : 3:1 minimum sur la carte */
+  --control-border: #71717A;
+
+  /* Échelle d'espacements */
+  --spacing-0: 0px;
+  --spacing-1: 4px;
+  --spacing-2: 8px;
+  --spacing-3: 16px;
+  --spacing-4: 24px;
+  --spacing-5: 32px;
+
+  /* Rayons */
+  --radius-sm: 4px;
+  --radius-md: 8px;
+  --radius-lg: 16px;
+  --radius-xl: 24px;
+
+  /* Tailles de texte */
+  --text-xs: 0.75rem;   /* 12px */
+  --text-sm: 0.875rem;  /* 14px */
+  --text-base: 1rem;    /* 16px */
+  --text-lg: 1.125rem;  /* 18px */
+  --text-xl: 1.25rem;   /* 20px */
+  --text-2xl: 1.5rem;   /* 24px */
+  --text-3xl: 1.875rem; /* 30px */
+
+  /* Police de base */
+  --font-family: Inter, system-ui, -apple-system, "Segoe UI", sans-serif;
+
+  /* Autres propriétés du root original */
   font-synthesis: none;
   text-rendering: optimizeLegibility;
   -webkit-font-smoothing: antialiased;
@@ -21,20 +54,60 @@
   -webkit-text-size-adjust: 100%;
 }
 
+/* Application de la police à tout le body */
+body {
+  font-family: var(--font-family);
+  font-variant-numeric: tabular-nums; /* Pour les montants */
+  background-color: var(--surface-background);
+  color: var(--text-primary);
+  margin: 0;
+  min-height: 100vh;
+  transition: background-color 0.2s, color 0.2s;
+}
+
+/* Support pour le thème sombre si nécessaire */
+@media (prefers-color-scheme: dark) {
+  :root {
+    --surface-background: #0F0F10; /* Garde les mêmes couleurs pour l'instant */
+    --surface-card: #1A1A1C;
+    --surface-border: #2A2A2D;
+    --text-primary: #FFFFFF;
+    --text-secondary: #A1A1AA;
+    --color-income: #3B82F6;
+    --color-expense: #EF4444;
+    --color-recurring: #F59E0B;
+    --color-available: #22C55E;
+    --color-savings: #14B8A6;
+    --on-color: #0F0F10;
+    --control-border: #71717A;
+  }
+}
+
+/* Styles de base mis à jour pour utiliser les variables */
 .container {
   margin: 0;
-  padding-top: 10vh;
+  padding-top: var(--spacing-5); /* 10vh remplacé par spacing-5 pour commencer, à ajuster */
   display: flex;
   flex-direction: column;
   justify-content: center;
   text-align: center;
+  min-height: 100vh;
+  box-sizing: border-box;
 }
 
 .logo {
   height: 6em;
-  padding: 1.5em;
+  padding: var(--spacing-3); /* 1.5em */
   will-change: filter;
   transition: 0.75s;
+}
+
+.logo.vite:hover {
+  filter: drop-shadow(0 0 2em #747bff);
+}
+
+.logo.react:hover {
+  filter: drop-shadow(0 0 2em #61dafb);
 }
 
 .logo.tauri:hover {
@@ -44,33 +117,37 @@
 .row {
   display: flex;
   justify-content: center;
+  gap: var(--spacing-2); /* 8px */
 }
 
 a {
   font-weight: 500;
-  color: #646cff;
+  color: var(--color-income); /* Utilise la couleur revenu par défaut */
   text-decoration: inherit;
 }
 
 a:hover {
-  color: #535bf2;
+  color: #535bf2; /* À convertir en variable si nécessaire */
 }
 
 h1 {
   text-align: center;
+  font-size: var(--text-3xl);
+  margin-bottom: var(--spacing-4);
 }
 
+/* Mise à jour des inputs et buttons */
 input,
 button {
-  border-radius: 8px;
+  border-radius: var(--radius-md);
   border: 1px solid transparent;
-  padding: 0.6em 1.2em;
-  font-size: 1em;
+  padding: var(--spacing-1) var(--spacing-2); /* 0.6em 1.2em approximativement */
+  font-size: var(--text-base);
   font-weight: 500;
   font-family: inherit;
-  color: #0f0f0f;
-  background-color: #ffffff;
-  transition: border-color 0.25s;
+  color: var(--text-primary);
+  background-color: var(--surface-card);
+  transition: border-color 0.25s, background-color 0.2s;
   box-shadow: 0 2px 2px rgba(0, 0, 0, 0.2);
 }
 
@@ -79,11 +156,12 @@ button {
 }
 
 button:hover {
-  border-color: #396cd8;
+  border-color: var(--color-income);
 }
+
 button:active {
-  border-color: #396cd8;
-  background-color: #e8e8e8;
+  border-color: var(--color-income);
+  background-color: var(--surface-border);
 }
 
 input,
@@ -92,25 +170,540 @@ button {
 }
 
 #greet-input {
-  margin-right: 5px;
+  margin-right: var(--spacing-1);
 }
 
+/* Focus visible sur tous les éléments interactifs. Plus spécifique que « input, button { outline: none } ». */
+button:focus-visible,
+input:focus-visible,
+select:focus-visible,
+textarea:focus-visible,
+a:focus-visible {
+  outline: 2px solid var(--color-income);
+  outline-offset: 2px;
+}
+
+/* Styles pour le mode sombre si nécessaire */
 @media (prefers-color-scheme: dark) {
-  :root {
-    color: #f6f6f6;
-    background-color: #2f2f2f;
-  }
-
-  a:hover {
-    color: #24c8db;
-  }
-
   input,
   button {
-    color: #ffffff;
-    background-color: #0f0f0f98;
+    color: var(--text-primary);
+    background-color: var(--surface-card);
   }
   button:active {
-    background-color: #0f0f0f69;
+    background-color: var(--surface-border);
   }
+}
+/* Formulaires du tableau de bord */
+.form-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+  gap: var(--spacing-2);
+}
+
+.form-field {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-1);
+}
+
+.form-field label {
+  font-size: var(--text-sm);
+  color: var(--text-secondary);
+}
+
+.form-actions {
+  grid-column: 1 / -1;
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  align-items: center;
+  gap: var(--spacing-2);
+}
+
+.field-error {
+  margin: 0;
+  color: var(--color-expense);
+  font-size: var(--text-xs);
+}
+
+.btn-primary {
+  padding: var(--spacing-2) var(--spacing-3);
+  border: none;
+  border-radius: var(--radius-md);
+  background: var(--color-income);
+  color: var(--on-color);
+  cursor: pointer;
+}
+
+.btn-primary:hover:not(:disabled) {
+  filter: brightness(1.08);
+}
+
+.btn-primary:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.form-input {
+  box-sizing: border-box;
+  width: 100%;
+  min-width: 0;
+  font: inherit;
+  padding: var(--spacing-2);
+  border-radius: var(--radius-md);
+  border: 1px solid var(--control-border);
+  background: var(--surface-card);
+  color: var(--text-primary);
+}
+
+.form-input[aria-invalid="true"] {
+  border-color: var(--color-expense);
+}
+
+.form-input:focus-visible,
+.btn-primary:focus-visible,
+.toast-action:focus-visible {
+  outline: 2px solid var(--color-income);
+  outline-offset: 2px;
+}
+
+.toast-region {
+  position: fixed;
+  right: var(--spacing-3);
+  bottom: var(--spacing-3);
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-2);
+  z-index: 1000;
+  max-width: min(360px, calc(100vw - 2 * var(--spacing-3)));
+}
+
+.toast {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-2);
+  padding: var(--spacing-2) var(--spacing-3);
+  border-radius: var(--radius-md);
+  color: var(--on-color);
+  background: var(--color-income);
+  box-shadow: 0 4px 6px rgba(0, 0, 0, 0.3);
+}
+
+.toast-error {
+  background: var(--color-expense);
+}
+
+.toast-action {
+  margin-left: auto;
+  background: none;
+  border: none;
+  color: var(--on-color);
+  font: inherit;
+  font-weight: 600;
+  text-decoration: underline;
+  cursor: pointer;
+  padding: 0;
+}
+
+/* Mise en page du tableau de bord */
+.app-container {
+  max-width: 1280px;
+  margin: 0 auto;
+  box-sizing: border-box;
+}
+
+.dashboard-main {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-4);
+  margin-bottom: var(--spacing-5);
+}
+
+.chart-card {
+  min-width: 0;
+  background: var(--surface-card);
+  border-radius: 12px;
+  padding: var(--spacing-3);
+}
+
+.chart-box {
+  position: relative;
+  width: 100%;
+  height: 360px;
+}
+
+.ops-pair {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--spacing-4);
+  align-items: stretch;
+}
+
+.ops-card {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  background: var(--surface-card);
+  border-radius: 12px;
+  padding: var(--spacing-3);
+}
+
+.ops-card h2 {
+  font-size: var(--text-lg);
+  margin: 0 0 var(--spacing-2);
+}
+
+.ops-scroll {
+  max-height: 320px;
+  overflow-y: auto;
+}
+
+.ops-scroll:focus-visible {
+  outline: 2px solid var(--color-income);
+  outline-offset: 2px;
+}
+
+.ops-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.ops-row {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto auto auto;
+  gap: var(--spacing-2);
+  align-items: center;
+  padding: var(--spacing-2) 0;
+  border-bottom: 1px solid var(--surface-border);
+}
+
+.ops-kind {
+  font-size: var(--text-xs);
+  font-weight: 600;
+  padding: 2px var(--spacing-2);
+  border-radius: var(--radius-sm);
+  color: var(--on-color);
+}
+
+.ops-kind-income {
+  background: var(--color-income);
+}
+
+.ops-kind-expense {
+  background: var(--color-expense);
+}
+
+.ops-kind-recurring {
+  background: var(--color-recurring);
+}
+
+.ops-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ops-meta {
+  font-size: var(--text-sm);
+  color: var(--text-secondary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 14rem;
+}
+
+.ops-amount {
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+  font-weight: 500;
+}
+
+/* Delete: grey at rest, red on hover, visible focus, disabled style. The hit area stays 32px. */
+.ops-delete {
+  width: 32px;
+  height: 32px;
+  border: none;
+  border-radius: var(--radius-md);
+  background: none;
+  color: var(--text-secondary);
+  font-size: 1.2rem;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.ops-delete:hover:not(:disabled) {
+  color: var(--on-color);
+  background: var(--color-expense);
+}
+
+.ops-delete:focus-visible,
+.ops-edit:focus-visible,
+.btn-ghost:focus-visible {
+  outline: 2px solid var(--color-income);
+  outline-offset: 2px;
+}
+
+.ops-delete:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.ops-actions {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-1);
+}
+
+.ops-edit {
+  padding: var(--spacing-1) var(--spacing-2);
+  border: 1px solid var(--surface-border);
+  border-radius: var(--radius-md);
+  background: none;
+  color: var(--text-secondary);
+  font: inherit;
+  font-size: var(--text-sm);
+  cursor: pointer;
+}
+
+.ops-edit:hover:not(:disabled) {
+  color: var(--text-primary);
+  border-color: var(--text-secondary);
+}
+
+.ops-edit:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.btn-ghost {
+  padding: var(--spacing-2) var(--spacing-3);
+  border: 1px solid var(--surface-border);
+  border-radius: var(--radius-md);
+  background: none;
+  color: var(--text-secondary);
+  font: inherit;
+  cursor: pointer;
+}
+
+.btn-ghost:hover:not(:disabled) {
+  color: var(--text-primary);
+  border-color: var(--text-secondary);
+}
+
+.btn-ghost:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+/* Row in edit mode: the form takes the whole row */
+.ops-row-editing {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.ops-edit-form {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+  gap: var(--spacing-2);
+  align-items: start;
+  width: 100%;
+}
+
+.ops-edit-actions {
+  grid-column: 1 / -1;
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  align-items: center;
+  gap: var(--spacing-2);
+}
+
+.ops-edit-actions .field-error {
+  margin-right: auto;
+}
+
+/* Colored dot before a category name; a neutral ring when the entry has no category */
+.cat-dot {
+  display: inline-block;
+  flex: 0 0 auto;
+  width: 10px;
+  height: 10px;
+  margin-right: var(--spacing-1);
+  border-radius: 50%;
+  vertical-align: middle;
+}
+
+.cat-dot-none {
+  background: transparent;
+  border: 1.5px solid var(--text-secondary);
+}
+
+.ops-empty-state {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--spacing-2);
+}
+
+.ops-card h2:focus-visible {
+  outline: 2px solid var(--color-income);
+  outline-offset: 2px;
+}
+
+.ops-empty {
+  color: var(--text-secondary);
+  margin: 0;
+}
+
+.add-forms {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--spacing-5);
+  margin-bottom: var(--spacing-5);
+}
+
+.add-forms > div {
+  flex: 1 1 280px;
+  min-width: 0;
+}
+
+.ops-row > * {
+  min-width: 0;
+}
+
+@media (max-width: 900px) {
+  .ops-pair {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+/* Navigation entre les mois : boutons ‹ › autour du sélecteur */
+.month-nav {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--spacing-2);
+  margin-bottom: var(--spacing-4);
+}
+
+.month-nav-btn {
+  width: 36px;
+  height: 36px;
+  padding: 0;
+  border: 1px solid var(--control-border);
+  border-radius: var(--radius-md);
+  background: var(--surface-card);
+  color: var(--text-primary);
+  font-size: var(--text-lg);
+  line-height: 1;
+  cursor: pointer;
+}
+
+.month-nav-btn:hover:not(:disabled) {
+  border-color: var(--text-secondary);
+}
+
+.month-nav-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+/* Bouton × de la puce de filtre actif */
+.filter-remove {
+  background: none;
+  border: none;
+  color: var(--text-secondary);
+  cursor: pointer;
+  padding: var(--spacing-1);
+  font-size: var(--text-xs);
+}
+
+.filter-remove:hover:not(:disabled) {
+  color: var(--text-primary);
+}
+
+/* Sélecteur clavier de catégorie, sous le titre du graphique */
+.chart-filter {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--spacing-2);
+  margin-bottom: var(--spacing-3);
+}
+
+.chart-filter label {
+  font-size: var(--text-sm);
+  color: var(--text-secondary);
+}
+
+.chart-filter .form-input {
+  width: auto;
+  min-width: 14rem;
+}
+
+/* Carte d'évolution sur 6 mois (lecture seule) */
+.evolution-card {
+  min-width: 0;
+}
+
+.evolution-scope {
+  margin: 0 0 var(--spacing-2);
+  color: var(--text-secondary);
+  font-size: var(--text-sm);
+}
+
+.evolution-chart {
+  position: relative;
+  width: 100%;
+  height: 280px;
+}
+
+.evolution-empty {
+  margin: var(--spacing-2) 0;
+  color: var(--text-secondary);
+}
+
+.evolution-table-wrap {
+  margin-top: var(--spacing-3);
+  overflow-x: auto;
+}
+
+.evolution-table-wrap:focus-visible {
+  outline: 2px solid var(--color-income);
+  outline-offset: 2px;
+}
+
+.evolution-table {
+  width: 100%;
+  min-width: 30rem;
+  border-collapse: collapse;
+  font-variant-numeric: tabular-nums;
+}
+
+.evolution-table caption {
+  padding-bottom: var(--spacing-2);
+  color: var(--text-secondary);
+  font-size: var(--text-sm);
+  text-align: left;
+}
+
+.evolution-table th,
+.evolution-table td {
+  padding: var(--spacing-2);
+  border-bottom: 1px solid var(--surface-border);
+  text-align: left;
+}
+
+.evolution-table td:nth-of-type(-n+2) {
+  text-align: right;
+}
+
+.evolution-table td:last-child {
+  color: var(--text-secondary);
+  font-size: var(--text-sm);
+}
+
+.evolution-table tr[aria-current="date"] th {
+  font-weight: 600;
 }
